@@ -1,0 +1,16 @@
+experiment_name: multiclass_efficientnet_b0_cbce
+model:
+  paradigm: multiclass
+  backbone: efficientnet_b0
+  loss: cbce
+training:
+  batch_size: 16
+  num_epochs: 5
+  learning_rate: 1e-4
+  weight_decay: 1e-4
+cv:
+  num_folds: 5
+  current_fold: 0
+paths:
+  dataset_config: configs/dataset/limuc.yaml
+  output_root: results
