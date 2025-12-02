@@ -4,7 +4,7 @@ import torch
 import numpy as np
 import cv2
 from torch.utils.data import DataLoader
-from src.utils.config import load_and_merge
+from src.utils.config import load_and_merge, validate_config
 from src.utils.seed import set_seed
 from src.data.limuc_dataset import LIMUCDataset
 from src.models.backbones import build_backbone, get_backbone_output_dim
@@ -21,6 +21,7 @@ def main():
 
     cfg = load_and_merge("configs/dataset/limuc.yaml", args.config)
     cfg.setdefault("cv", {})["current_fold"] = args.fold
+    validate_config(cfg)
     set_seed(cfg.get("seed", 42))
 
     val_ds = LIMUCDataset(cfg, split="val")

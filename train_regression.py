@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
-from src.utils.config import load_and_merge
+from src.utils.config import load_and_merge, validate_config
 from src.utils.seed import set_seed
 from src.utils.logging import setup_logging, get_logger
 from src.utils.paths import resolve_output_dir
@@ -53,6 +53,7 @@ def main():
     cfg = load_and_merge("configs/dataset/limuc.yaml", args.config)
     if args.fold is not None:
         cfg.setdefault("cv", {})["current_fold"] = args.fold
+    validate_config(cfg)
     set_seed(cfg.get("seed", 42))
 
     output_dir = resolve_output_dir(cfg)
