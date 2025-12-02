@@ -92,7 +92,7 @@ def main():
 
     best_qwk = -1
     history = []
-    for epoch in range(cfg["training"].get("num_epochs", 10)):
+    for epoch in range(cfg["training"].get("num_epochs", 40)):
         train_loss = train_one_epoch(model, train_loader, criterion, optimizer, device)
         val_loss, metrics, preds, targets = validate(model, val_loader, criterion, device)
         history.append({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss, **metrics})
