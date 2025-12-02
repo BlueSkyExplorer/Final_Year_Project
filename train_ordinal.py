@@ -16,14 +16,12 @@ from src.losses import ordinal as ordinal_losses
 from src.metrics.classification_metrics import evaluate_all
 
 
-def train_one_epoch(model, loader, criterion, device):
+def train_one_epoch(model, loader, loss_fn, optimizer, device):
     ensure_dataset_not_empty(loader, "Training")
     model.train()
     total_loss = 0.0
     for images, labels, _, _ in loader:
         images, labels = images.to(device), labels.to(device)
-        optimizer = criterion['optimizer']
-        loss_fn = criterion['loss_fn']
         optimizer.zero_grad()
         logits = model(images)
         loss = loss_fn(logits, labels)
@@ -31,6 +29,11 @@ def train_one_epoch(model, loader, criterion, device):
         optimizer.step()
         total_loss += loss.item() * images.size(0)
     return total_loss / len(loader.dataset)
+
+
+def set_requires_grad(module, requires_grad: bool):
+    for param in module.parameters():
+        param.requires_grad = requires_grad
 
 
 def validate(model, loader, loss_fn, device):
@@ -91,12 +94,33 @@ def main():
     else:
         raise ValueError(f"Unknown loss {loss_name}")
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=cfg["training"].get("learning_rate", 1e-4), weight_decay=cfg["training"].get("weight_decay", 1e-4))
+    training_cfg = cfg["training"]
+    num_epochs = training_cfg.get("num_epochs", 40)
+    base_lr = training_cfg.get("learning_rate", 1e-4)
+    weight_decay = training_cfg.get("weight_decay", 1e-4)
+    freeze_epochs = training_cfg.get("freeze_epochs", 0)
+    backbone_lr = training_cfg.get("backbone_learning_rate", base_lr)
+
+    if freeze_epochs > 0:
+        set_requires_grad(backbone, False)
+        optimizer = torch.optim.Adam(head.parameters(), lr=base_lr, weight_decay=weight_decay)
+        logger.info(f"Freezing backbone for first {freeze_epochs} epochs (head lr={base_lr})")
+    else:
+        optimizer = torch.optim.Adam(model.parameters(), lr=base_lr, weight_decay=weight_decay)
 
     best_qwk = -1
     history = []
-    for epoch in range(cfg["training"].get("num_epochs", 40)):
-        train_loss = train_one_epoch(model, train_loader, {"optimizer": optimizer, "loss_fn": loss_fn}, device)
+    for epoch in range(num_epochs):
+        if freeze_epochs > 0 and epoch == freeze_epochs:
+            logger.info("Unfreezing backbone for fine-tuning")
+            set_requires_grad(backbone, True)
+            param_groups = [
+                {"params": backbone.parameters(), "lr": backbone_lr},
+                {"params": head.parameters(), "lr": base_lr},
+            ]
+            optimizer = torch.optim.Adam(param_groups, lr=base_lr, weight_decay=weight_decay)
+
+        train_loss = train_one_epoch(model, train_loader, loss_fn, optimizer, device)
         val_loss, metrics = validate(model, val_loader, loss_fn, device)
         history.append({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss, **metrics})
         logger.info(f"Epoch {epoch}: train_loss={train_loss:.4f} val_loss={val_loss:.4f} qwk={metrics['qwk']:.4f}")

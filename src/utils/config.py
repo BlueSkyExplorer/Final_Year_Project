@@ -66,6 +66,19 @@ def _coerce_int(value: Any, field_name: str) -> int:
     return coerced
 
 
+def _coerce_non_negative_int(value: Any, field_name: str) -> int:
+    """Convert value to a non-negative int with helpful error messages."""
+
+    try:
+        coerced = int(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"'{field_name}' must be an integer, but got {value!r}") from None
+
+    if coerced < 0:
+        raise ValueError(f"'{field_name}' must be >= 0, but got {coerced}")
+    return coerced
+
+
 def validate_config(cfg: Dict[str, Any]) -> None:
     required_sections = ["paths", "images", "training", "model"]
     missing_sections = [key for key in required_sections if key not in cfg]
@@ -123,4 +136,14 @@ def validate_config(cfg: Dict[str, Any]) -> None:
     if "batch_size" in training:
         training["batch_size"] = _coerce_int(
             training["batch_size"], "training.batch_size"
+        )
+
+    if "freeze_epochs" in training:
+        training["freeze_epochs"] = _coerce_non_negative_int(
+            training["freeze_epochs"], "training.freeze_epochs"
+        )
+
+    if "backbone_learning_rate" in training:
+        training["backbone_learning_rate"] = _coerce_float(
+            training["backbone_learning_rate"], "training.backbone_learning_rate", allow_zero=False
         )
