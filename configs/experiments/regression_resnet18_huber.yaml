@@ -6,7 +6,7 @@ model:
   delta: 1.0
 training:
   batch_size: 16
-  num_epochs: 5
+  num_epochs: 40
   learning_rate: 1e-4
   weight_decay: 1e-4
 cv:

@@ -36,6 +36,36 @@ def ensure_dir(path: str) -> None:
     Path(path).mkdir(parents=True, exist_ok=True)
 
 
+def _coerce_float(value: Any, field_name: str, allow_zero: bool = True) -> float:
+    """Convert value to float with helpful error messages."""
+
+    try:
+        coerced = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"'{field_name}' must be a float, but got {value!r}") from None
+
+    if allow_zero:
+        if coerced < 0:
+            raise ValueError(f"'{field_name}' must be >= 0, but got {coerced}")
+    else:
+        if coerced <= 0:
+            raise ValueError(f"'{field_name}' must be > 0, but got {coerced}")
+    return coerced
+
+
+def _coerce_int(value: Any, field_name: str) -> int:
+    """Convert value to int with helpful error messages."""
+
+    try:
+        coerced = int(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"'{field_name}' must be an integer, but got {value!r}") from None
+
+    if coerced <= 0:
+        raise ValueError(f"'{field_name}' must be > 0, but got {coerced}")
+    return coerced
+
+
 def validate_config(cfg: Dict[str, Any]) -> None:
     required_sections = ["paths", "images", "training", "model"]
     missing_sections = [key for key in required_sections if key not in cfg]
@@ -70,3 +100,27 @@ def validate_config(cfg: Dict[str, Any]) -> None:
         raise ValueError(f"Configured folds_file is not a file: {folds_file}")
     if not os.access(folds_file, os.R_OK):
         raise ValueError(f"Configured folds_file is not readable: {folds_file}")
+
+    training = cfg.get("training", {})
+    if not isinstance(training, dict):
+        raise ValueError("'training' section must be a dictionary")
+
+    if "learning_rate" in training:
+        training["learning_rate"] = _coerce_float(
+            training["learning_rate"], "training.learning_rate", allow_zero=False
+        )
+
+    if "weight_decay" in training:
+        training["weight_decay"] = _coerce_float(
+            training["weight_decay"], "training.weight_decay", allow_zero=True
+        )
+
+    if "num_epochs" in training:
+        training["num_epochs"] = _coerce_int(
+            training["num_epochs"], "training.num_epochs"
+        )
+
+    if "batch_size" in training:
+        training["batch_size"] = _coerce_int(
+            training["batch_size"], "training.batch_size"
+        )
