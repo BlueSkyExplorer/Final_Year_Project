@@ -1,8 +1,9 @@
 # PyTorch GPU build (CUDA 12.1). For other CUDA versions, swap the suffix (e.g., +cu118) and URL.
 --extra-index-url https://download.pytorch.org/whl/cu121
-torch==2.1.2+cu121
-torchvision==0.16.2+cu121
-numpy
+torch==2.2.2+cu121
+torchvision==0.17.2+cu121
+# NumPy 1.26.x is required because the CUDA wheels above were built against NumPy 1.x.
+numpy==1.26.4
 pandas
 scikit-learn
 scipy
