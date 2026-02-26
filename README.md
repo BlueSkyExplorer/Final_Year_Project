@@ -188,8 +188,17 @@ H_{total} = 16 \times T
 
 ### 5.6 執行 sweep
 
+`run_layer1_sweep.sh` 支援以 `MEMBER_ID` 做靜態任務切分（`A/B/C/ALL`），並會依 `BASE_CONFIG` 的 `model.paradigm` 自動選擇對應訓練腳本（multi-class / ordinal / regression）。
+
 ```bash
-bash scripts/run_layer1_sweep.sh
+# 成員 A：只跑 freeze=0 的 Layer 1 組合
+MEMBER_ID=A bash scripts/run_layer1_sweep.sh
+
+# 成員 B：只跑 freeze=5 的 Layer 1 組合
+MEMBER_ID=B bash scripts/run_layer1_sweep.sh
+
+# 例如改跑 ordinal base config
+BASE_CONFIG=configs/experiments/ordinal_resnet18_coral.yaml MEMBER_ID=A bash scripts/run_layer1_sweep.sh
 ```
 
 ### 5.7 Loss comparison：加入 per-loss tuning（避免單一 shared HP）
@@ -230,6 +239,27 @@ python scripts/run_loss_comparison.py \
 - `preview_ranking.csv`：fold 0/1 小網格排名（含 `hp_source`）
 - `selected_candidates.csv`：每個 loss 晉級到 full 5-fold 的 top 候選
 - `final_5fold_summary.csv`：最終 5-fold 結果表（含 `hp_source`）
+
+### 5.8 多人協作建議：靜態任務分割與結果合併
+
+`run_loss_comparison.py` 可直接用 `--configs` 切割工作；例如 3 位成員分別跑 multiclass / ordinal / regression：
+
+```bash
+# 成員 A：multiclass losses
+python scripts/run_loss_comparison.py   --configs     configs/experiments/multiclass_resnet18_ce.yaml     configs/experiments/multiclass_resnet18_focal.yaml     configs/experiments/multiclass_resnet18_cbce.yaml   --baseline-lr 3e-4 --baseline-wd 1e-5
+
+# 成員 B：ordinal losses
+python scripts/run_loss_comparison.py   --configs     configs/experiments/ordinal_resnet18_coral.yaml     configs/experiments/ordinal_resnet18_corn.yaml     configs/experiments/ordinal_resnet18_distance.yaml   --baseline-lr 3e-4 --baseline-wd 1e-5
+
+# 成員 C：regression losses
+python scripts/run_loss_comparison.py   --configs     configs/experiments/regression_resnet18_mse.yaml     configs/experiments/regression_resnet18_huber.yaml   --baseline-lr 3e-4 --baseline-wd 1e-5
+```
+
+可用 `scripts/merge_results.py` 合併各成員輸出的 ranking / summary：
+
+```bash
+python scripts/merge_results.py   memberA/results/sweeps/layer1_layer2_xxx   memberB/results/sweeps/layer1_layer2_yyy   memberC/results/loss_comparison/per_loss_tuning_zzz
+```
 
 ---
 
