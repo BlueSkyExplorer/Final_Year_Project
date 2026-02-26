@@ -115,16 +115,16 @@ echo "{}" > configs/folds/limuc_5fold_patient.json
 
 ---
 
-## 5. Layer 1（粗搜）定義與成本估算
+## 5. Sweep orchestrator（Layer 1 / Layer 2）
 
-### 5.1 搜尋空間（目前設定）
+### 5.1 Layer 1 搜尋空間（粗搜）
 
 - `LR ∈ {1e-3, 3e-4}`（2 組）
 - `WD ∈ {1e-4, 1e-5}`（2 組）
 - `BS = 16`（固定 1 組）
 - `freeze_epochs ∈ {0, 5}`（2 組）
 
-### 5.2 組合數公式（已修正）
+### 5.2 組合數公式
 
 Layer 1（粗搜）組合數：
 
@@ -132,9 +132,38 @@ Layer 1（粗搜）組合數：
 N_{L1} = |LR| \times |WD| \times |BS| \times |freeze| = 2 \times 2 \times 1 \times 2 = 8
 \]
 
-> 因此 Layer 1 應為 **8 組**，不是 16 組。
+> Layer 1 為 **8 組**（固定空間）。
 
-### 5.3 訓練成本估算（避免排程錯誤）
+### 5.3 晉級策略（Promotion policy）
+
+`scripts/run_layer1_sweep.sh` 目前採用兩階段流程：
+
+1. 先跑完 Layer 1 的所有組合。
+2. 用 **雙 fold 平均**（預設 fold 0 + fold 1）計算 `mean_qwk` 排名。
+3. 以 `std_qwk` 做 tie-breaker（**std 較小優先**）。
+4. 晉級數可設定為：
+   - 固定 Top-K（預設 `PROMOTION_TOP_K=4`）
+   - 或比例（設定 `PROMOTION_RATIO`，例如 0.3~0.5）
+5. 只對晉級組合做 Layer 2 的 **±1 LR/WD 鄰域展開**。
+
+> 這可避免對所有 Layer 1 組合做全量 Layer 2 展開，降低訓練成本。
+
+### 5.4 晉級可追蹤輸出
+
+orchestrator 會在 `results/sweeps/layer1_layer2_<timestamp>/` 產生：
+
+- `layer1_ranking.csv`
+- `layer1_ranking.jsonl`
+
+每筆均含以下欄位，便於追蹤決策：
+
+- `rank`
+- `promoted`
+- `promotion_reason`
+- `mean_qwk`
+- `std_qwk`
+
+### 5.5 訓練成本估算（避免排程錯誤）
 
 若每個組合跑完整 5-fold CV，且每次訓練平均耗時 `T` 小時：
 
@@ -154,7 +183,12 @@ H_{total} = 40 \times T
 
 - 總訓練時數 `= 40 × 1.5 = 60` 小時。
 
-> 若後續目標必須回到 16 組，需新增一個維度（例如 `BS ∈ {16, 32}`），此時 `2 × 2 × 2 × 2 = 16`。
+
+### 5.6 執行 sweep
+
+```bash
+bash scripts/run_layer1_sweep.sh
+```
 
 ---
 
