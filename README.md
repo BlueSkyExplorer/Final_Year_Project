@@ -160,28 +160,30 @@ orchestrator 會在 `results/sweeps/layer1_layer2_<timestamp>/` 產生：
 - `rank`
 - `promoted`
 - `promotion_reason`
+- `fold0_qwk`
+- `fold1_qwk`
 - `mean_qwk`
 - `std_qwk`
 
 ### 5.5 訓練成本估算（避免排程錯誤）
 
-若每個組合跑完整 5-fold CV，且每次訓練平均耗時 `T` 小時：
+若每個組合在 Phase 1 固定跑 2 folds（fold 0 + fold 1），且每次訓練平均耗時 `T` 小時：
 
 - 訓練次數：
 
 \[
-N_{train} = 8 \times 5 = 40
+N_{train} = 8 \times 2 = 16
 \]
 
 - 總訓練時數：
 
 \[
-H_{total} = 40 \times T
+H_{total} = 16 \times T
 \]
 
 範例（若 `T = 1.5` 小時）：
 
-- 總訓練時數 `= 40 × 1.5 = 60` 小時。
+- 總訓練時數 `= 16 × 1.5 = 24` 小時。
 
 
 ### 5.6 執行 sweep
