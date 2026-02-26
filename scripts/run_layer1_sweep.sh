@@ -25,14 +25,23 @@ LAYER2_LRS=(1e-3 7e-4 5e-4 3e-4 2e-4 1e-4)
 LAYER2_WDS=(1e-4 7e-5 5e-5 3e-5 1e-5)
 
 RESULT_ROOT="results"
-RUN_TAG="$(date +%Y%m%d_%H%M%S)"
 if [[ -n "${RESUME_SWEEP_DIR:-}" ]]; then
   SWEEP_DIR="${RESUME_SWEEP_DIR}"
   echo "[Resume] using existing sweep dir: ${SWEEP_DIR}"
 else
+  RUN_TAG="$(date +%Y%m%d_%H%M%S)"
   SWEEP_DIR="${RESULT_ROOT}/sweeps/layer1_layer2_${RUN_TAG}"
 fi
 mkdir -p "${SWEEP_DIR}"
+RUN_TAG_FILE="${SWEEP_DIR}/run_tag.txt"
+if [[ -f "${RUN_TAG_FILE}" ]]; then
+  RUN_TAG="$(<"${RUN_TAG_FILE}")"
+else
+  if [[ -z "${RUN_TAG:-}" ]]; then
+    RUN_TAG="$(date +%Y%m%d_%H%M%S)"
+  fi
+  printf '%s\n' "${RUN_TAG}" > "${RUN_TAG_FILE}"
+fi
 REGISTRY_PATH="${SWEEP_DIR}/sweep_registry.jsonl"
 touch "${REGISTRY_PATH}"
 
@@ -131,10 +140,15 @@ for raw in registry.read_text(encoding="utf-8").splitlines():
     if not raw:
         continue
     row = json.loads(raw)
+    try:
+        row_lr = float(row.get("lr", -1))
+        row_wd = float(row.get("weight_decay", -1))
+    except (TypeError, ValueError):
+        continue
     if (
         row.get("phase") == phase
-        and float(row.get("lr", -1)) == lr
-        and float(row.get("weight_decay", -1)) == wd
+        and abs(row_lr - lr) < 1e-12
+        and abs(row_wd - wd) < 1e-12
         and int(row.get("freeze_epochs", -1)) == frz
         and int(row.get("fold", -1)) == fold
         and row.get("status") == "completed"
