@@ -192,6 +192,45 @@ H_{total} = 16 \times T
 bash scripts/run_layer1_sweep.sh
 ```
 
+### 5.7 Loss comparison：加入 per-loss tuning（避免單一 shared HP）
+
+為避免「所有 loss 直接套同一組 HP」造成比較偏差，建議改為以下流程：
+
+1. 先用既有通用流程（例如 Layer 1/Layer 2）取得一組 baseline HP（shared HP）。
+2. 每個 loss 在正式 5-fold 前，先做小網格（LR + WD + loss 專屬參數）：
+   - LR：2~3 組
+   - WD：2~3 組
+   - loss 專屬參數：
+     - focal：`gamma` / `alpha`
+     - huber：`delta`
+     - distance-aware：`alpha`
+3. 小網格先只跑 fold 0 + fold 1，依 `mean_qwk` 排名挑 top 1~2。
+4. 只有 top 組進入該 loss 的完整 5-fold。
+5. 結果表明確標註 `hp_source`：`shared_hp` 或 `per_loss_tuned`，避免報告解讀混淆。
+
+可使用下列 orchestrator 執行：
+
+```bash
+python scripts/run_loss_comparison.py \
+  --configs \
+    configs/experiments/multiclass_resnet18_ce.yaml \
+    configs/experiments/multiclass_resnet18_focal.yaml \
+    configs/experiments/multiclass_resnet18_cbce.yaml \
+  --baseline-lr 3e-4 \
+  --baseline-wd 1e-4 \
+  --baseline-freeze-epochs 5 \
+  --baseline-batch-size 16 \
+  --lr-grid 1e-4,3e-4,1e-3 \
+  --wd-grid 1e-5,1e-4,3e-4 \
+  --top-k 2
+```
+
+輸出目錄（`results/loss_comparison/per_loss_tuning_<timestamp>/`）包含：
+
+- `preview_ranking.csv`：fold 0/1 小網格排名（含 `hp_source`）
+- `selected_candidates.csv`：每個 loss 晉級到 full 5-fold 的 top 候選
+- `final_5fold_summary.csv`：最終 5-fold 結果表（含 `hp_source`）
+
 ---
 
 ## 6. 訓練
