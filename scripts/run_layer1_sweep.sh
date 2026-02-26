@@ -7,7 +7,7 @@ set -euo pipefail
 # - Layer 2: only promoted combos perform ±1 LR/WD neighborhood expansion.
 
 BASE_CONFIG="configs/experiments/multiclass_resnet18_ce.yaml"
-FOLDS=(0 1 2 3 4)
+EVAL_FOLDS=(0 1)
 LAYER1_LRS=(1e-3 3e-4)
 LAYER1_WDS=(1e-4 1e-5)
 FREEZE_EPOCHS=(0 5)
@@ -16,7 +16,6 @@ BATCH_SIZE=16
 # Promotion policy (choose one)
 PROMOTION_TOP_K=4              # fixed small top-k
 PROMOTION_RATIO=""             # e.g. 0.4 ; takes precedence when set
-RANK_BY_FOLDS=(0 1)            # dual-fold average for ranking
 
 # Layer 2 neighborhood grids (used for ±1 expansion around promoted combo's LR/WD)
 LAYER2_LRS=(1e-3 7e-4 5e-4 3e-4 2e-4 1e-4)
@@ -61,8 +60,8 @@ PY
 run_combo_all_folds() {
   local exp_name="$1"
   local cfg_path="$2"
-  echo "[Run ${exp_name}] all folds: ${FOLDS[*]}"
-  for fold in "${FOLDS[@]}"; do
+  echo "[Run ${exp_name}] eval folds: ${EVAL_FOLDS[*]}"
+  for fold in "${EVAL_FOLDS[@]}"; do
     echo "  -> fold ${fold}"
     python train_multiclass.py --config "${cfg_path}" --fold "${fold}"
   done
@@ -100,7 +99,7 @@ from pathlib import Path
 
 sweep_dir = Path("${SWEEP_DIR}")
 result_root = Path("${RESULT_ROOT}")
-rank_folds = [int(x) for x in "${RANK_BY_FOLDS[*]}".split()]
+rank_folds = [0, 1]
 promotion_top_k = int("${PROMOTION_TOP_K}")
 promotion_ratio_raw = "${PROMOTION_RATIO}".strip()
 promotion_ratio = float(promotion_ratio_raw) if promotion_ratio_raw else None
@@ -113,7 +112,7 @@ combos_tsv = sweep_dir / "layer1_combos.tsv"
 for line in combos_tsv.read_text().strip().splitlines():
     exp_name, lr, wd, frz = line.split("\t")
     fold_qwks = {}
-    for fold in [0,1,2,3,4]:
+    for fold in rank_folds:
         metrics_path = result_root / exp_name / f"fold_{fold}" / "metrics.json"
         if not metrics_path.exists():
             continue
@@ -125,11 +124,15 @@ for line in combos_tsv.read_text().strip().splitlines():
     rank_vals = [fold_qwks[f] for f in rank_folds if f in fold_qwks]
     mean_qwk = statistics.fmean(rank_vals) if rank_vals else float("-inf")
     std_qwk = statistics.pstdev(rank_vals) if len(rank_vals) > 1 else 0.0
+    fold0_qwk = fold_qwks.get(0)
+    fold1_qwk = fold_qwks.get(1)
     rows.append({
         "experiment_name": exp_name,
         "lr": float(lr),
         "weight_decay": float(wd),
         "freeze_epochs": int(frz),
+        "fold0_qwk": fold0_qwk,
+        "fold1_qwk": fold1_qwk,
         "mean_qwk": mean_qwk,
         "std_qwk": std_qwk,
         "rank_folds": rank_folds,
@@ -162,7 +165,8 @@ with csv_path.open("w", newline="") as f:
         f,
         fieldnames=[
             "rank", "experiment_name", "lr", "weight_decay", "freeze_epochs",
-            "mean_qwk", "std_qwk", "promoted", "promotion_reason",
+            "fold0_qwk", "fold1_qwk", "mean_qwk", "std_qwk",
+            "promoted", "promotion_reason",
         ],
     )
     writer.writeheader()
