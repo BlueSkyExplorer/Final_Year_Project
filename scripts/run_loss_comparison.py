@@ -47,6 +47,12 @@ class Candidate:
     loss_params: Dict[str, float]
 
 
+@dataclass
+class TrainRunResult:
+    status: str
+    error_summary: str = ""
+
+
 
 def parse_float_list(raw: str) -> List[float]:
     return [float(v.strip()) for v in raw.split(",") if v.strip()]
@@ -184,10 +190,51 @@ def build_candidates(
 
 
 
-def run_train(script: str, config_path: Path, fold: int) -> None:
+def run_train(script: str, config_path: Path, fold: int) -> TrainRunResult:
     cmd = ["python", script, "--config", str(config_path), "--fold", str(fold)]
     print("[RUN]", " ".join(cmd))
-    subprocess.run(cmd, check=True)
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode == 0:
+        return TrainRunResult(status="completed")
+
+    outputs = []
+    if proc.stderr:
+        outputs.extend(line.strip() for line in proc.stderr.strip().splitlines()[-3:] if line.strip())
+    if proc.stdout:
+        outputs.extend(line.strip() for line in proc.stdout.strip().splitlines()[-3:] if line.strip())
+
+    summary = " | ".join(outputs)[:300] if outputs else f"exit_code={proc.returncode}"
+    print(f"[WARN] Training failed for fold={fold}: {summary}")
+    return TrainRunResult(status="failed", error_summary=summary)
+
+
+def append_registry_record(registry_path: Path, record: dict) -> None:
+    with registry_path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def load_registry(registry_path: Path) -> Dict[tuple, dict]:
+    records: Dict[tuple, dict] = {}
+    if not registry_path.exists():
+        return records
+
+    with registry_path.open("r", encoding="utf-8") as f:
+        for raw_line in f:
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            fold = rec.get("fold", -1)
+            try:
+                fold_int = int(fold)
+            except (TypeError, ValueError):
+                continue
+            key = (str(rec.get("experiment_name")), fold_int)
+            records[key] = rec
+    return records
 
 
 
@@ -197,6 +244,7 @@ def summarize_preview(
     preview_folds: List[int],
     loss_config: Path,
     candidates: List[Candidate],
+    candidate_status: Dict[str, dict],
 ) -> List[dict]:
     rows = []
     for c in candidates:
@@ -220,6 +268,8 @@ def summarize_preview(
                 "preview_fold_scores": json.dumps(fold_qwk, ensure_ascii=False),
                 "mean_qwk": mean_qwk,
                 "std_qwk": std_qwk,
+                "status": candidate_status.get(exp_name, {}).get("status", "completed"),
+                "failed_reason": candidate_status.get(exp_name, {}).get("failed_reason", ""),
             }
         )
 
@@ -254,6 +304,7 @@ def main() -> None:
     parser.add_argument("--full-folds", type=str, default="0,1,2,3,4")
     parser.add_argument("--top-k", type=int, default=2)
     parser.add_argument("--output-root", type=str, default="results/loss_comparison")
+    parser.add_argument("--run-dir", type=str, default="", help="Existing run dir for resume.")
     args = parser.parse_args()
 
     lr_grid = parse_float_list(args.lr_grid)
@@ -262,10 +313,12 @@ def main() -> None:
     full_folds = parse_int_list(args.full_folds)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir = Path(args.output_root) / f"per_loss_tuning_{timestamp}"
+    run_dir = Path(args.run_dir) if args.run_dir else Path(args.output_root) / f"per_loss_tuning_{timestamp}"
     temp_dir = run_dir / "generated_configs"
+    registry_path = run_dir / "comparison_registry.jsonl"
     run_dir.mkdir(parents=True, exist_ok=True)
     temp_dir.mkdir(parents=True, exist_ok=True)
+    registry_state = load_registry(registry_path)
 
     all_preview_rows: List[dict] = []
     selected_rows: List[dict] = []
@@ -292,31 +345,92 @@ def main() -> None:
             temp_dir=temp_dir,
         )
 
+        candidate_status: Dict[str, dict] = {}
+        exp_to_candidate = {load_yaml(c.config_path)["experiment_name"]: c for c in candidates}
+
         for cand in candidates:
+            exp_name = load_yaml(cand.config_path).get("experiment_name")
+            preview_failed_reason = ""
             for fold in preview_folds:
-                run_train(train_script, cand.config_path, fold)
+                key = (exp_name, fold)
+                existing = registry_state.get(key)
+                if existing and existing.get("status") == "completed":
+                    print(f"[SKIP] {exp_name} fold={fold} already completed")
+                    continue
+
+                result = run_train(train_script, cand.config_path, fold)
+                record = {
+                    "timestamp": datetime.now().isoformat(timespec="seconds"),
+                    "stage": "preview",
+                    "loss_config": str(cfg_path),
+                    "experiment_name": exp_name,
+                    "candidate_id": cand.candidate_id,
+                    "fold": fold,
+                    "status": result.status,
+                    "failed_reason": result.error_summary,
+                }
+                append_registry_record(registry_path, record)
+                registry_state[key] = record
+
+                if result.status == "failed":
+                    preview_failed_reason = result.error_summary
+
+            candidate_status[exp_name] = {
+                "status": "failed" if preview_failed_reason else "completed",
+                "failed_reason": preview_failed_reason,
+            }
 
         preview_rows = summarize_preview(
             result_root=Path("results"),
             preview_folds=preview_folds,
             loss_config=cfg_path,
             candidates=candidates,
+            candidate_status=candidate_status,
         )
         all_preview_rows.extend(preview_rows)
 
-        tuned_rows = [r for r in preview_rows if r["hp_source"] == "per_loss_tuned"]
+        tuned_rows = [
+            r
+            for r in preview_rows
+            if r["hp_source"] == "per_loss_tuned" and r.get("status", "completed") == "completed"
+        ]
         if not tuned_rows:
-            tuned_rows = [r for r in preview_rows if r["hp_source"] == "shared_hp"]
+            tuned_rows = [
+                r
+                for r in preview_rows
+                if r["hp_source"] == "shared_hp" and r.get("status", "completed") == "completed"
+            ]
 
         picked = tuned_rows[: max(1, args.top_k)]
         selected_rows.extend(picked)
 
-        exp_to_candidate = {load_yaml(c.config_path)["experiment_name"]: c for c in candidates}
         for chosen in picked:
             chosen_exp = chosen["experiment_name"]
             cand = exp_to_candidate[chosen_exp]
+            final_failed_reason = ""
             for fold in full_folds:
-                run_train(train_script, cand.config_path, fold)
+                key = (chosen_exp, fold)
+                existing = registry_state.get(key)
+                if existing and existing.get("status") == "completed":
+                    print(f"[SKIP] {chosen_exp} fold={fold} already completed")
+                    continue
+
+                result = run_train(train_script, cand.config_path, fold)
+                record = {
+                    "timestamp": datetime.now().isoformat(timespec="seconds"),
+                    "stage": "full",
+                    "loss_config": str(cfg_path),
+                    "experiment_name": chosen_exp,
+                    "candidate_id": cand.candidate_id,
+                    "fold": fold,
+                    "status": result.status,
+                    "failed_reason": result.error_summary,
+                }
+                append_registry_record(registry_path, record)
+                registry_state[key] = record
+
+                if result.status == "failed":
+                    final_failed_reason = result.error_summary
 
             fold_scores = {fold: get_best_qwk(Path("results"), chosen_exp, fold) for fold in full_folds}
             vals = [v for v in fold_scores.values() if v is not None]
@@ -334,6 +448,8 @@ def main() -> None:
                     "full_fold_scores": json.dumps(fold_scores, ensure_ascii=False),
                     "mean_qwk": statistics.fmean(vals) if vals else float("-inf"),
                     "std_qwk": statistics.pstdev(vals) if len(vals) > 1 else 0.0,
+                    "status": "failed" if final_failed_reason else "completed",
+                    "failed_reason": final_failed_reason,
                 }
             )
 
