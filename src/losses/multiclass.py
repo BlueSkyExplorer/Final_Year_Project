@@ -7,15 +7,16 @@ def cross_entropy_loss(logits, targets, class_weights: Optional[torch.Tensor] = 
     return F.cross_entropy(logits, targets, weight=class_weights)
 
 
-def class_balanced_ce(logits, targets):
-    classes = torch.unique(targets)
-    counts = torch.tensor([torch.sum(targets == c) for c in classes], device=targets.device, dtype=torch.float)
-    weights = 1.0 / (counts + 1e-6)
-    weight_tensor = torch.zeros(logits.size(1), device=targets.device)
-    for cls, w in zip(classes, weights):
-        weight_tensor[cls] = w
-    weight_tensor = weight_tensor / weight_tensor.sum() * len(classes)
-    return F.cross_entropy(logits, targets, weight=weight_tensor)
+def compute_class_weights(targets: torch.Tensor, num_classes: int, eps: float = 1e-6) -> torch.Tensor:
+    counts = torch.bincount(targets, minlength=num_classes).float()
+    weights = 1.0 / (counts + eps)
+    return weights / weights.sum() * num_classes
+
+
+def class_balanced_ce(logits, targets, class_weights: Optional[torch.Tensor] = None):
+    if class_weights is None:
+        class_weights = compute_class_weights(targets, num_classes=logits.size(1))
+    return F.cross_entropy(logits, targets, weight=class_weights.to(logits.device))
 
 
 def focal_loss(logits, targets, gamma: float = 2.0, alpha: float = 0.25):
