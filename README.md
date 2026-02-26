@@ -271,6 +271,30 @@ python scripts/run_loss_comparison.py   --configs     configs/experiments/regres
 python scripts/merge_results.py   memberA/results/sweeps/layer1_layer2_xxx   memberB/results/sweeps/layer1_layer2_yyy   memberC/results/loss_comparison/per_loss_tuning_zzz
 ```
 
+### 5.9 腳本平台支援
+
+以下為目前常用腳本的作業系統支援情況：
+
+1. `scripts/run_layer1_sweep.sh`：**Unix shell only**（Linux/macOS/WSL/Git Bash）。
+2. `scripts/run_loss_comparison.py`、`scripts/merge_results.py`：**Windows/Linux/macOS 可用**。
+3. Windows 建議啟動方式（PowerShell + venv）：
+
+```powershell
+python scripts/run_loss_comparison.py ...
+```
+
+4. 若保留 `.sh` 流程，可在 Windows 以 WSL 執行替代指令：
+
+```bash
+wsl bash scripts/run_layer1_sweep.sh
+```
+
+> 若專案提供（或新增）Python 版 sweep（如 `scripts/run_layer1_sweep.py`），建議將其作為 Windows 首選流程：
+
+```powershell
+python scripts/run_layer1_sweep.py --member-id A
+```
+
 ---
 
 ## 6. 訓練
