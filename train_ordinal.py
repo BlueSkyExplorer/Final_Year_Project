@@ -101,6 +101,8 @@ def main():
     weight_decay = training_cfg.get("weight_decay", 1e-4)
     freeze_epochs = training_cfg.get("freeze_epochs", 0)
     backbone_lr = training_cfg.get("backbone_learning_rate", base_lr)
+    early_stopping_patience = training_cfg.get("early_stopping_patience", 0)
+    early_stopping_min_delta = training_cfg.get("early_stopping_min_delta", 0.0)
 
     if freeze_epochs > 0:
         set_requires_grad(backbone, False)
@@ -112,6 +114,7 @@ def main():
     scheduler, scheduler_on_val = build_lr_scheduler(optimizer, training_cfg, num_epochs)
 
     best_qwk = -1
+    epochs_without_improvement = 0
     history = []
     for epoch in range(num_epochs):
         if freeze_epochs > 0 and epoch == freeze_epochs:
@@ -134,10 +137,20 @@ def main():
                 scheduler.step()
         current_lrs = [group["lr"] for group in optimizer.param_groups]
         logger.info(f"Epoch {epoch}: train_loss={train_loss:.4f} val_loss={val_loss:.4f} qwk={metrics['qwk']:.4f} lr={current_lrs}")
-        if metrics["qwk"] > best_qwk:
+        if metrics["qwk"] > best_qwk + early_stopping_min_delta:
             best_qwk = metrics["qwk"]
+            epochs_without_improvement = 0
             torch.save(model.state_dict(), Path(output_dir) / "best_model.pt")
             logger.info("Saved new best model")
+        else:
+            epochs_without_improvement += 1
+            if early_stopping_patience > 0 and epochs_without_improvement >= early_stopping_patience:
+                logger.info(
+                    f"Early stopping triggered at epoch {epoch} after "
+                    f"{epochs_without_improvement} epoch(s) without QWK improvement "
+                    f"(patience={early_stopping_patience}, min_delta={early_stopping_min_delta})."
+                )
+                break
 
     with open(Path(output_dir) / "metrics.json", "w") as f:
         json.dump(history, f, indent=2)

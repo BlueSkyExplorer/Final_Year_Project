@@ -147,3 +147,13 @@ def validate_config(cfg: Dict[str, Any]) -> None:
         training["backbone_learning_rate"] = _coerce_float(
             training["backbone_learning_rate"], "training.backbone_learning_rate", allow_zero=False
         )
+
+    if "early_stopping_patience" in training:
+        training["early_stopping_patience"] = _coerce_non_negative_int(
+            training["early_stopping_patience"], "training.early_stopping_patience"
+        )
+
+    if "early_stopping_min_delta" in training:
+        training["early_stopping_min_delta"] = _coerce_float(
+            training["early_stopping_min_delta"], "training.early_stopping_min_delta", allow_zero=True
+        )
