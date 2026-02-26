@@ -314,7 +314,9 @@ run_combo_all_folds() {
 # -----------------------------
 # Layer 1: coarse sweep training
 # -----------------------------
-: > "${SWEEP_DIR}/layer1_combos.tsv"
+if [[ ! -f "${SWEEP_DIR}/layer1_combos.tsv" ]]; then
+  touch "${SWEEP_DIR}/layer1_combos.tsv"
+fi
 combo_idx=0
 for lr in "${LAYER1_LRS[@]}"; do
   for wd in "${LAYER1_WDS[@]}"; do
@@ -326,7 +328,9 @@ for lr in "${LAYER1_LRS[@]}"; do
       echo "[Layer1 ${combo_idx}] lr=${lr}, wd=${wd}, batch_size=${BATCH_SIZE}, freeze_epochs=${frz}"
       run_combo_all_folds "layer1" "${exp_name}" "${combo_cfg}" "${lr}" "${wd}" "${frz}"
 
-      printf '%s\t%s\t%s\t%s\n' "${exp_name}" "${lr}" "${wd}" "${frz}" >> "${SWEEP_DIR}/layer1_combos.tsv"
+      if ! awk -F '\t' -v target="${exp_name}" '$1 == target { found=1; exit } END { exit(found ? 0 : 1) }' "${SWEEP_DIR}/layer1_combos.tsv" 2>/dev/null; then
+        printf '%s\t%s\t%s\t%s\n' "${exp_name}" "${lr}" "${wd}" "${frz}" >> "${SWEEP_DIR}/layer1_combos.tsv"
+      fi
     done
   done
 done
