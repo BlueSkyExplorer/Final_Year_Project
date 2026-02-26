@@ -99,18 +99,31 @@ def read_registry_latest(registry_path: Path) -> dict[tuple[str, float, float, i
     latest: dict[tuple[str, float, float, int, int], dict[str, Any]] = {}
     if not registry_path.exists():
         return latest
+    ignored_rows = 0
     for raw in registry_path.read_text(encoding="utf-8").splitlines():
         if not raw.strip():
             continue
-        row = json.loads(raw)
-        key = (
-            row.get("phase"),
-            float(row.get("lr")),
-            float(row.get("weight_decay")),
-            int(row.get("freeze_epochs")),
-            int(row.get("fold")),
-        )
+        try:
+            row = json.loads(raw)
+        except json.JSONDecodeError:
+            ignored_rows += 1
+            continue
+
+        try:
+            key = (
+                row.get("phase"),
+                float(row.get("lr")),
+                float(row.get("weight_decay")),
+                int(row.get("freeze_epochs")),
+                int(row.get("fold")),
+            )
+        except (TypeError, ValueError):
+            ignored_rows += 1
+            continue
         latest[key] = row
+
+    if ignored_rows > 0:
+        print(f"[WARN] read_registry_latest ignored {ignored_rows} malformed row(s): {registry_path}")
     return latest
 
 
