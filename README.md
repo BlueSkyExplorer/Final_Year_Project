@@ -1,63 +1,242 @@
-# UC Severity Prediction on LIMUC
+# LIMUC UC Severity Baseline (PyTorch)
 
-This repository provides reproducible PyTorch code for assessing ulcerative colitis severity from endoscopic images using the public LIMUC dataset. It supports multi-class classification of Mayo Endoscopic Score (MES 0–3), ordinal regression (CORAL/CORN style), and regression-to-class pipelines, with 5-fold patient-level cross-validation.
+此專案提供以 **LIMUC** 內視鏡影像資料集進行潰瘍性結腸炎（UC）嚴重度建模的 PyTorch baseline，支援三種任務範式：
 
-## Key Features
-- Config-driven experiments (YAML) controlling data paths, models, optimizers, and losses.
-- Patient-level 5-fold cross-validation automatically generated and cached.
-- Multiple learning paradigms: multi-class, ordinal, and regression.
-- ResNet-18 (main) and EfficientNet-B0 (control) backbones.
-- Rich metrics: Quadratic Weighted Kappa (primary), macro/per-class F1, AUROC for derived binaries, MAE, etc.
-- Grad-CAM/Grad-CAM++ visualizations for interpretability.
+- **Multi-class classification**（MES 0/1/2/3）
+- **Ordinal prediction**（CORAL / CORN / distance-aware）
+- **Regression-to-class**（連續分數回歸再映射至 MES）
 
-## Repository Structure
-- `configs/`
-  - `dataset/limuc.yaml`: dataset paths and augmentation settings.
-  - `folds/limuc_5fold_patient.json`: cached patient-level folds (auto-generated if empty/missing).
-  - `experiments/*.yaml`: experiment-specific hyperparameters per paradigm/backbone/loss.
-- `src/`
-  - `data/`: dataset loader, transforms, and fold utilities.
-  - `models/`: backbone builders, heads, and ordinal utilities.
-  - `losses/`: multi-class, ordinal, and regression losses.
-  - `metrics/`: evaluation metrics for multi-class and derived binary tasks.
-  - `explain/`: Grad-CAM implementations.
-  - `utils/`: config handling, seeding, logging, and path helpers.
-- `train_multiclass.py`, `train_ordinal.py`, `train_regression.py`: training entry points.
-- `analyze_results.py`: aggregate cross-validation results and run statistical tests.
-- `generate_cam.py`: produce Grad-CAM heatmaps for trained models.
+另外內建：
+- patient-level fold 切分
+- held-out test patient split
+- 統一 config 驅動訓練
+- 結果彙整與 Grad-CAM 可解釋化
 
-## Setup
+---
+
+## 1. Repository 結構
+
+```text
+.
+├── configs/
+│   ├── dataset/
+│   │   └── limuc.yaml
+│   ├── experiments/
+│   │   ├── multiclass_*.yaml
+│   │   ├── ordinal_*.yaml
+│   │   └── regression_*.yaml
+│   └── folds/
+│       └── limuc_5fold_patient.json   # fold cache（需存在，內容可先為 {}）
+├── src/
+│   ├── data/
+│   │   ├── limuc_dataset.py
+│   │   ├── folds.py
+│   │   └── transforms.py
+│   ├── models/
+│   ├── losses/
+│   ├── metrics/
+│   ├── explain/
+│   └── utils/
+├── train_multiclass.py
+├── train_ordinal.py
+├── train_regression.py
+├── analyze_results.py
+└── generate_cam.py
+```
+
+---
+
+## 2. 環境安裝
+
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## Dataset Preparation
-1. Download the LIMUC dataset and place it under `data/LIMUC/patient_based_classified_images/`.
-2. The structure should be `patient_based_classified_images/<patient_id>/Mayo 0/*.bmp` (and Mayo 1/2/3).
-3. On the first run, folds are created automatically and stored at `configs/folds/limuc_5fold_patient.json` using a stratified patient-level split (seeded).
+---
 
-## Running Experiments
-Example: multi-class cross-entropy with ResNet-18, fold 0:
-```bash
-python train_multiclass.py --config configs/experiments/multiclass_resnet18_ce.yaml --fold 0
+## 3. 資料準備
+
+### 3.1 LIMUC 目錄格式
+
+請將資料放在（預設）`data/LIMUC/patient_based_classified_images`，每位病人底下有 `Mayo 0` ~ `Mayo 3`：
+
+```text
+data/LIMUC/patient_based_classified_images/
+├── patient_001/
+│   ├── Mayo 0/
+│   ├── Mayo 1/
+│   ├── Mayo 2/
+│   └── Mayo 3/
+├── patient_002/
+│   └── ...
+└── ...
 ```
-Run folds 0–4 to complete cross-validation. Replace config for different paradigms or backbones.
 
-## Aggregating Cross-Validation
-After completing 5 folds for an experiment, summarize metrics:
+### 3.2 fold cache 注意事項（重要）
+
+目前 `validate_config()` 會要求 `paths.folds_file` **必須存在**。因此第一次使用請先建立檔案：
+
+```bash
+mkdir -p configs/folds
+echo "{}" > configs/folds/limuc_5fold_patient.json
+```
+
+之後 `src/data/folds.py` 會在需要時重新寫入正確格式（包含 `folds` 與 `test_patients`）。
+
+---
+
+## 4. 設定檔說明
+
+### 4.1 Dataset config：`configs/dataset/limuc.yaml`
+
+重點欄位：
+
+- `paths.data_root`：資料根目錄
+- `paths.folds_file`：patient split cache 路徑
+- `images.image_size`：輸入尺寸
+- `cv.num_folds`：K-fold 的 K
+- `cv.test_ratio`：先從所有病人抽出 test patient 的比例
+- `seed`：隨機種子
+
+### 4.2 Experiment config：`configs/experiments/*.yaml`
+
+重點欄位：
+
+- `experiment_name`
+- `model.paradigm`：`multiclass` / `ordinal` / `regression`
+- `model.backbone`：例如 `resnet18`、`efficientnet_b0`
+- `model.loss`：依任務不同（`ce`、`focal`、`cbce`、`coral`、`corn`、`mse`、`huber`...）
+- `training.*`：batch size、epoch、lr、weight decay、freeze epochs 等
+- `cv.current_fold`：目前訓練 fold（也可由 CLI `--fold` 覆蓋）
+
+---
+
+## 5. 訓練
+
+### 5.1 Multi-class
+
+```bash
+python train_multiclass.py \
+  --config configs/experiments/multiclass_resnet18_ce.yaml \
+  --fold 0
+```
+
+### 5.2 Ordinal
+
+```bash
+python train_ordinal.py \
+  --config configs/experiments/ordinal_resnet18_coral.yaml \
+  --fold 0
+```
+
+### 5.3 Regression
+
+```bash
+python train_regression.py \
+  --config configs/experiments/regression_resnet18_mse.yaml \
+  --fold 0
+```
+
+> 建議依序跑完 `--fold 0..4` 完成 5-fold CV。
+
+---
+
+## 6. split 邏輯（目前實作）
+
+在 `src/data/folds.py`：
+
+1. 先依病人主導類別做 **stratified hold-out test split**（比例 `cv.test_ratio`）
+2. 再對剩餘 train/val 病人做 `StratifiedKFold`
+3. cache 至 `folds_file`：
+   - `folds`: 每 fold 的病人清單
+   - `test_patients`: 保留給 test split 的病人
+
+在 `src/data/limuc_dataset.py`：
+
+- `split="train"`：排除 test patients，且排除 `current_fold`（當作 validation fold）
+- `split="val"`：排除 test patients，只保留 `current_fold`
+- `split="test"`：只保留 `test_patients`
+
+使用方式：
+
+```python
+from src.data.limuc_dataset import LIMUCDataset
+
+train_ds = LIMUCDataset(cfg, split="train")
+val_ds = LIMUCDataset(cfg, split="val")
+test_ds = LIMUCDataset(cfg, split="test")
+```
+
+---
+
+## 7. 輸出結果
+
+每次訓練輸出到：
+
+```text
+results/<experiment_name>/fold_<k>/
+├── best_model.pt
+├── metrics.json
+└── train.log (若 logger 有寫檔)
+```
+
+---
+
+## 8. 結果彙整
+
 ```bash
 python analyze_results.py --experiment multiclass_resnet18_ce
 ```
-This computes mean ± std, coefficient of variation, and bootstrap confidence intervals; pairwise tests are supported when comparing experiments.
 
-## Grad-CAM Visualization
-Generate Grad-CAM overlays for a trained checkpoint:
+會讀取 `results/<experiment>/fold_*/metrics.json` 並輸出整體 summary（mean/std/cv）。
+
+---
+
+## 9. Grad-CAM
+
 ```bash
-python generate_cam.py --config configs/experiments/multiclass_resnet18_ce.yaml --fold 0 --num_per_class 3
+python generate_cam.py \
+  --config configs/experiments/multiclass_resnet18_ce.yaml \
+  --fold 0 \
+  --num_per_class 3
 ```
-Outputs are stored under `results/<experiment>/fold_<k>/cam/`.
 
-## Citation
-If you use this codebase, please cite the LIMUC dataset and acknowledge this repository.
+輸出路徑：
+
+```text
+results/<experiment_name>/fold_<k>/cam/
+```
+
+---
+
+## 10. 常見問題（FAQ）
+
+### Q1. 為什麼一開始就報 `Configured folds_file does not exist`？
+因為目前 config 驗證要求 fold cache 檔案存在。先建立空檔（內容 `{}`）即可，後續會自動覆寫成完整 split。
+
+### Q2. `No image samples found ... split='val'/'test'`？
+通常是：
+- `data_root` 路徑不對
+- 資料夾結構非 `patient/Mayo i/*`
+- 資料量太小或分布不均，導致某 split 沒資料
+
+### Q3. 要不要手動刪除舊 fold cache？
+如果你改了 `test_ratio`、`num_folds` 或資料集內容，建議刪除 `folds_file` 後重建（或改檔名）以避免沿用舊切分。
+
+---
+
+## 11. 快速開始（最短流程）
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+
+mkdir -p configs/folds
+echo "{}" > configs/folds/limuc_5fold_patient.json
+
+python train_multiclass.py --config configs/experiments/multiclass_resnet18_ce.yaml --fold 0
+python analyze_results.py --experiment multiclass_resnet18_ce
+```
