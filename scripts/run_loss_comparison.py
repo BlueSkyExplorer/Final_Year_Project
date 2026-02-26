@@ -37,6 +37,7 @@ TRAIN_SCRIPT_BY_PARADIGM = {
 @dataclass
 class Candidate:
     candidate_id: str
+    experiment_name: str
     config_path: Path
     hp_source: str
     lr: float
@@ -121,6 +122,7 @@ def build_candidates(
     candidates.append(
         Candidate(
             candidate_id="shared_hp",
+            experiment_name=shared_cfg["experiment_name"],
             config_path=shared_path,
             hp_source="shared_hp",
             lr=baseline_lr,
@@ -175,6 +177,7 @@ def build_candidates(
         candidates.append(
             Candidate(
                 candidate_id=f"per_loss_tuned_{idx}",
+                experiment_name=tuned_cfg["experiment_name"],
                 config_path=tuned_path,
                 hp_source="per_loss_tuned",
                 lr=float(lr),
@@ -248,7 +251,7 @@ def summarize_preview(
 ) -> List[dict]:
     rows = []
     for c in candidates:
-        exp_name = load_yaml(c.config_path).get("experiment_name")
+        exp_name = c.experiment_name
         fold_qwk = {fold: get_best_qwk(result_root, exp_name, fold) for fold in preview_folds}
         available = [q for q in fold_qwk.values() if q is not None]
         mean_qwk = statistics.fmean(available) if available else float("-inf")
@@ -306,8 +309,9 @@ def main() -> None:
     parser.add_argument(
         "--prefer-per-loss",
         action="store_true",
-        help="Prefer per_loss_tuned candidates first during preview selection.",
+        help="Apply soft preference to per_loss_tuned candidates during preview selection.",
     )
+    parser.add_argument("--prefer-margin", type=float, default=0.001, help="QWK bonus for per_loss_tuned when --prefer-per-loss is enabled.")
     parser.add_argument("--output-root", type=str, default="results/loss_comparison")
     parser.add_argument("--run-dir", type=str, default="", help="Existing run dir for resume.")
     args = parser.parse_args()
@@ -351,11 +355,11 @@ def main() -> None:
         )
 
         candidate_status: Dict[str, dict] = {}
-        exp_to_candidate = {load_yaml(c.config_path)["experiment_name"]: c for c in candidates}
+        exp_to_candidate = {c.experiment_name: c for c in candidates}
 
         for cand in candidates:
-            exp_name = load_yaml(cand.config_path).get("experiment_name")
-            preview_failed_reason = ""
+            exp_name = cand.experiment_name
+            failed_folds: List[str] = []
             for fold in preview_folds:
                 key = (exp_name, fold)
                 existing = registry_state.get(key)
@@ -378,11 +382,11 @@ def main() -> None:
                 registry_state[key] = record
 
                 if result.status == "failed":
-                    preview_failed_reason = result.error_summary
+                    failed_folds.append(f"fold{fold}: {result.error_summary}")
 
             candidate_status[exp_name] = {
-                "status": "failed" if preview_failed_reason else "completed",
-                "failed_reason": preview_failed_reason,
+                "status": "failed" if failed_folds else "completed",
+                "failed_reason": " | ".join(failed_folds),
             }
 
         preview_rows = summarize_preview(
@@ -396,9 +400,14 @@ def main() -> None:
 
         completed_rows = [r for r in preview_rows if r.get("status", "completed") == "completed"]
         if args.prefer_per_loss:
-            preferred_rows = [r for r in completed_rows if r["hp_source"] == "per_loss_tuned"]
-            fallback_rows = [r for r in completed_rows if r["hp_source"] != "per_loss_tuned"]
-            picked = (preferred_rows + fallback_rows)[: max(1, args.top_k)]
+            picked = sorted(
+                completed_rows,
+                key=lambda r: (
+                    -(r["mean_qwk"] + (args.prefer_margin if r["hp_source"] == "per_loss_tuned" else 0.0)),
+                    r["std_qwk"],
+                    r["candidate_id"],
+                ),
+            )[: max(1, args.top_k)]
         else:
             picked = completed_rows[: max(1, args.top_k)]
         selected_rows.extend(picked)
