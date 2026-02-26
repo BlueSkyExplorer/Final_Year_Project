@@ -53,6 +53,24 @@ class TrainRunResult:
     error_summary: str = ""
 
 
+def build_selection_reason(*, row: dict, completed_rows: List[dict], prefer_margin: float, prefer_enabled: bool) -> str:
+    shared_best = next((r["mean_qwk"] for r in completed_rows if r["hp_source"] == "shared_hp"), None)
+    per_loss_best = next((r["mean_qwk"] for r in completed_rows if r["hp_source"] == "per_loss_tuned"), None)
+
+    if shared_best is None or per_loss_best is None:
+        return f"rank={row['rank']}; only_source={row['hp_source']}"
+
+    margin = float(per_loss_best) - float(shared_best)
+    preference_state = (
+        f"soft_preference={'on' if prefer_enabled else 'off'}; prefer_margin={prefer_margin:.4f}"
+    )
+    return (
+        f"rank={row['rank']}; selected_source={row['hp_source']}; "
+        f"shared_best={float(shared_best):.4f}; per_loss_best={float(per_loss_best):.4f}; "
+        f"margin={margin:.4f}; {preference_state}"
+    )
+
+
 
 def parse_float_list(raw: str) -> List[float]:
     return [float(v.strip()) for v in raw.split(",") if v.strip()]
@@ -305,7 +323,21 @@ def main() -> None:
     parser.add_argument("--top-k", type=int, default=2)
     parser.add_argument("--output-root", type=str, default="results/loss_comparison")
     parser.add_argument("--run-dir", type=str, default="", help="Existing run dir for resume.")
+    parser.add_argument(
+        "--prefer-per-loss",
+        action="store_true",
+        help="Soft preference for per_loss_tuned candidates when preview scores are within --prefer-margin.",
+    )
+    parser.add_argument(
+        "--prefer-margin",
+        type=float,
+        default=0.005,
+        help="QWK bonus applied to per_loss_tuned only when --prefer-per-loss is enabled.",
+    )
     args = parser.parse_args()
+
+    if args.prefer_margin < 0:
+        raise ValueError("--prefer-margin must be >= 0")
 
     lr_grid = parse_float_list(args.lr_grid)
     wd_grid = parse_float_list(args.wd_grid)
@@ -389,19 +421,31 @@ def main() -> None:
         )
         all_preview_rows.extend(preview_rows)
 
-        tuned_rows = [
-            r
-            for r in preview_rows
-            if r["hp_source"] == "per_loss_tuned" and r.get("status", "completed") == "completed"
-        ]
-        if not tuned_rows:
-            tuned_rows = [
-                r
-                for r in preview_rows
-                if r["hp_source"] == "shared_hp" and r.get("status", "completed") == "completed"
-            ]
+        completed_rows = [r for r in preview_rows if r.get("status", "completed") == "completed"]
+        completed_rows = sorted(
+            completed_rows,
+            key=lambda r: (
+                -(
+                    r["mean_qwk"]
+                    + (
+                        args.prefer_margin
+                        if args.prefer_per_loss and r["hp_source"] == "per_loss_tuned"
+                        else 0.0
+                    )
+                ),
+                r["std_qwk"],
+                r["candidate_id"],
+            ),
+        )
 
-        picked = tuned_rows[: max(1, args.top_k)]
+        picked = completed_rows[: max(1, args.top_k)]
+        for row in picked:
+            row["selection_reason"] = build_selection_reason(
+                row=row,
+                completed_rows=completed_rows,
+                prefer_margin=args.prefer_margin,
+                prefer_enabled=args.prefer_per_loss,
+            )
         selected_rows.extend(picked)
 
         for chosen in picked:
