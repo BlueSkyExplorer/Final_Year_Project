@@ -3,6 +3,7 @@ model:
   paradigm: ordinal
   backbone: resnet18
   loss: distance
+  alpha: 5
 training:
   batch_size: 16
   num_epochs: 40

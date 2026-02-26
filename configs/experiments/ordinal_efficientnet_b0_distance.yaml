@@ -3,6 +3,7 @@ model:
   paradigm: ordinal
   backbone: efficientnet_b0
   loss: distance
+  alpha: 6
 training:
   batch_size: 16
   num_epochs: 40
