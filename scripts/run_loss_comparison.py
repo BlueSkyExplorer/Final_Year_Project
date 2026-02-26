@@ -415,7 +415,7 @@ def main() -> None:
         for chosen in picked:
             chosen_exp = chosen["experiment_name"]
             cand = exp_to_candidate[chosen_exp]
-            final_failed_reason = ""
+            final_failed_folds: List[str] = []
             for fold in full_folds:
                 key = (chosen_exp, fold)
                 existing = registry_state.get(key)
@@ -438,7 +438,7 @@ def main() -> None:
                 registry_state[key] = record
 
                 if result.status == "failed":
-                    final_failed_reason = result.error_summary
+                    final_failed_folds.append(f"fold{fold}: {result.error_summary}")
 
             fold_scores = {fold: get_best_qwk(Path("results"), chosen_exp, fold) for fold in full_folds}
             vals = [v for v in fold_scores.values() if v is not None]
@@ -456,8 +456,8 @@ def main() -> None:
                     "full_fold_scores": json.dumps(fold_scores, ensure_ascii=False),
                     "mean_qwk": statistics.fmean(vals) if vals else float("-inf"),
                     "std_qwk": statistics.pstdev(vals) if len(vals) > 1 else 0.0,
-                    "status": "failed" if final_failed_reason else "completed",
-                    "failed_reason": final_failed_reason,
+                    "status": "failed" if final_failed_folds else "completed",
+                    "failed_reason": " | ".join(final_failed_folds),
                 }
             )
 
