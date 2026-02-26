@@ -9,12 +9,65 @@ set -euo pipefail
 # Resume usage:
 #   RESUME_SWEEP_DIR=results/sweeps/layer1_layer2_YYYYmmdd_HHMMSS bash scripts/run_layer1_sweep.sh
 
-BASE_CONFIG="configs/experiments/multiclass_resnet18_ce.yaml"
+BASE_CONFIG="${BASE_CONFIG:-configs/experiments/multiclass_resnet18_ce.yaml}"
 EVAL_FOLDS=(0 1)
-LAYER1_LRS=(1e-3 3e-4)
-LAYER1_WDS=(1e-4 1e-5)
-FREEZE_EPOCHS=(0 5)
 BATCH_SIZE=16
+
+# Static workload split for collaboration.
+# Example:
+#   MEMBER_ID=A bash scripts/run_layer1_sweep.sh
+#   MEMBER_ID=B bash scripts/run_layer1_sweep.sh
+MEMBER_ID="${MEMBER_ID:-A}"
+case "${MEMBER_ID}" in
+  A)
+    LAYER1_LRS=(1e-3 3e-4)
+    LAYER1_WDS=(1e-4 1e-5)
+    FREEZE_EPOCHS=(0)
+    ;;
+  B)
+    LAYER1_LRS=(1e-3 3e-4)
+    LAYER1_WDS=(1e-4 1e-5)
+    FREEZE_EPOCHS=(5)
+    ;;
+  C)
+    LAYER1_LRS=(1e-4 5e-5)
+    LAYER1_WDS=(1e-4 1e-5)
+    FREEZE_EPOCHS=(0 5)
+    ;;
+  ALL)
+    LAYER1_LRS=(1e-3 3e-4)
+    LAYER1_WDS=(1e-4 1e-5)
+    FREEZE_EPOCHS=(0 5)
+    ;;
+  *)
+    echo "[ERROR] Unsupported MEMBER_ID=${MEMBER_ID}. Use A/B/C/ALL."
+    exit 1
+    ;;
+esac
+
+PARADIGM=$(python - <<PY
+import yaml
+from pathlib import Path
+
+cfg = yaml.safe_load(Path("${BASE_CONFIG}").read_text(encoding="utf-8"))
+print(cfg.get("model", {}).get("paradigm", ""))
+PY
+)
+case "${PARADIGM}" in
+  multiclass)
+    TRAIN_SCRIPT="train_multiclass.py"
+    ;;
+  ordinal)
+    TRAIN_SCRIPT="train_ordinal.py"
+    ;;
+  regression)
+    TRAIN_SCRIPT="train_regression.py"
+    ;;
+  *)
+    echo "[ERROR] Unsupported paradigm '${PARADIGM}' in ${BASE_CONFIG}."
+    exit 1
+    ;;
+esac
 
 # Promotion policy (choose one)
 PROMOTION_TOP_K=4              # fixed small top-k
@@ -44,6 +97,9 @@ else
 fi
 REGISTRY_PATH="${SWEEP_DIR}/sweep_registry.jsonl"
 touch "${REGISTRY_PATH}"
+
+echo "[Config] MEMBER_ID=${MEMBER_ID}, BASE_CONFIG=${BASE_CONFIG}, PARADIGM=${PARADIGM}, TRAIN_SCRIPT=${TRAIN_SCRIPT}"
+echo "[Config] Layer1 LRs=${LAYER1_LRS[*]} WDs=${LAYER1_WDS[*]} FREEZE_EPOCHS=${FREEZE_EPOCHS[*]}"
 
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "${TMP_DIR}"' EXIT
@@ -180,7 +236,7 @@ run_single_fold_with_guard() {
 
     echo "  -> fold ${fold} (batch_size=${current_bs})"
     set +e
-    python train_multiclass.py --config "${cfg_path}" --fold "${fold}" > "${run_log}" 2>&1
+    python "${TRAIN_SCRIPT}" --config "${cfg_path}" --fold "${fold}" > "${run_log}" 2>&1
     local rc=$?
     set -e
 
