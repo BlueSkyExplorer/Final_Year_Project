@@ -32,9 +32,30 @@ def corn_loss(logits: torch.Tensor, targets: torch.Tensor, num_classes: int = 4)
     return loss / (num_classes - 1)
 
 
+def _ordinal_logits_to_class_probs(logits: torch.Tensor, num_classes: int) -> torch.Tensor:
+    """Convert ordinal threshold logits [B, K-1] to class probabilities [B, K]."""
+    threshold_probs = torch.sigmoid(logits)
+    class_probs = torch.zeros(logits.size(0), num_classes, device=logits.device, dtype=logits.dtype)
+    class_probs[:, 0] = 1.0 - threshold_probs[:, 0]
+    for cls_idx in range(1, num_classes - 1):
+        class_probs[:, cls_idx] = threshold_probs[:, cls_idx - 1] - threshold_probs[:, cls_idx]
+    class_probs[:, num_classes - 1] = threshold_probs[:, num_classes - 2]
+    # Numerical guard for imperfect monotonicity.
+    class_probs = class_probs.clamp_min(1e-6)
+    class_probs = class_probs / class_probs.sum(dim=1, keepdim=True)
+    return class_probs
+
+
 def distance_aware_loss(logits: torch.Tensor, targets: torch.Tensor, num_classes: int = 4) -> torch.Tensor:
-    probs = F.softmax(logits, dim=1)
-    target_one_hot = F.one_hot(targets, num_classes=num_classes).float()
-    distance = torch.abs(torch.arange(num_classes, device=logits.device).unsqueeze(0) - targets.unsqueeze(1))
-    weighted = distance * target_one_hot
-    return torch.sum(weighted * -torch.log(probs + 1e-6)) / logits.size(0)
+    if logits.size(1) == num_classes:
+        probs = F.softmax(logits, dim=1)
+    elif logits.size(1) == num_classes - 1:
+        probs = _ordinal_logits_to_class_probs(logits, num_classes)
+    else:
+        raise ValueError(
+            f"Expected logits with shape [B, {num_classes}] or [B, {num_classes - 1}], got {tuple(logits.shape)}"
+        )
+
+    class_indices = torch.arange(num_classes, device=logits.device).unsqueeze(0)
+    distance_weights = torch.abs(class_indices - targets.unsqueeze(1).long()).float()
+    return torch.mean(torch.sum(distance_weights * -torch.log(probs + 1e-6), dim=1))
