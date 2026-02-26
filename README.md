@@ -38,7 +38,8 @@
 │   ├── explain/
 │   └── utils/
 ├── scripts/
-│   └── run_layer1_sweep.sh
+│   ├── run_layer1_sweep.py
+│   └── run_layer1_sweep.sh   # Unix-only legacy wrapper
 ├── train_multiclass.py
 ├── train_ordinal.py
 ├── train_regression.py
@@ -136,7 +137,7 @@ N_{L1} = |LR| \times |WD| \times |BS| \times |freeze| = 2 \times 2 \times 1 \tim
 
 ### 5.3 晉級策略（Promotion policy）
 
-`scripts/run_layer1_sweep.sh` 目前採用兩階段流程：
+`scripts/run_layer1_sweep.py` 目前採用兩階段流程：
 
 1. 先跑完 Layer 1 的所有組合。
 2. 用 **雙 fold 平均**（預設 fold 0 + fold 1）計算 `mean_qwk` 排名。
@@ -188,17 +189,26 @@ H_{total} = 16 \times T
 
 ### 5.6 執行 sweep
 
-`run_layer1_sweep.sh` 支援以 `MEMBER_ID` 做靜態任務切分（`A/B/C/ALL`），並會依 `BASE_CONFIG` 的 `model.paradigm` 自動選擇對應訓練腳本（multi-class / ordinal / regression）。
+`run_layer1_sweep.py` 支援以 `MEMBER_ID` 做靜態任務切分（`A/B/C/ALL`），並會依 `BASE_CONFIG` 的 `model.paradigm` 自動選擇對應訓練腳本（multi-class / ordinal / regression）。
+
+> `run_layer1_sweep.sh` 保留為 Unix-only 舊版入口；建議優先使用跨平台的 Python 版本。
 
 ```bash
 # 成員 A：只跑 freeze=0 的 Layer 1 組合
-MEMBER_ID=A bash scripts/run_layer1_sweep.sh
+python scripts/run_layer1_sweep.py --member-id A
 
 # 成員 B：只跑 freeze=5 的 Layer 1 組合
-MEMBER_ID=B bash scripts/run_layer1_sweep.sh
+python scripts/run_layer1_sweep.py --member-id B
 
 # 例如改跑 ordinal base config
-BASE_CONFIG=configs/experiments/ordinal_resnet18_coral.yaml MEMBER_ID=A bash scripts/run_layer1_sweep.sh
+python scripts/run_layer1_sweep.py \
+  --member-id A \
+  --base-config configs/experiments/ordinal_resnet18_coral.yaml
+
+# resume 到既有 sweep 目錄
+python scripts/run_layer1_sweep.py \
+  --member-id A \
+  --resume-sweep-dir results/sweeps/layer1_layer2_YYYYmmdd_HHMMSS
 ```
 
 ### 5.7 Loss comparison：加入 per-loss tuning（避免單一 shared HP）
