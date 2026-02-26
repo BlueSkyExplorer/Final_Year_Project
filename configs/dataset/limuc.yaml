@@ -19,5 +19,6 @@ normalization:
 
 cv:
   num_folds: 5
+  test_ratio: 0.2  # 加入這行
 
 seed: 42
