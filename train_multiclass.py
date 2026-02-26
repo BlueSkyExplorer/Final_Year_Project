@@ -16,6 +16,12 @@ from src.losses import multiclass as mc_losses
 from src.metrics.classification_metrics import evaluate_all
 
 
+def _build_dataset_class_weights(train_dataset, num_classes: int, device: torch.device) -> torch.Tensor:
+    labels = torch.tensor(train_dataset.samples["label"].tolist(), dtype=torch.long)
+    class_weights = mc_losses.compute_class_weights(labels, num_classes=num_classes)
+    return class_weights.to(device)
+
+
 def train_one_epoch(model, loader, criterion, optimizer, device):
     ensure_dataset_not_empty(loader, "Training")
     model.train()
@@ -88,7 +94,9 @@ def main():
     if loss_name == "ce":
         criterion = mc_losses.cross_entropy_loss
     elif loss_name == "cbce":
-        criterion = mc_losses.class_balanced_ce
+        class_weights = _build_dataset_class_weights(train_ds, num_classes=4, device=device)
+        logger.info(f"Using dataset-level CBCE class weights: {class_weights.tolist()}")
+        criterion = lambda logits, targets: mc_losses.class_balanced_ce(logits, targets, class_weights=class_weights)
     elif loss_name == "focal":
         criterion = lambda logits, targets: mc_losses.focal_loss(logits, targets, gamma=cfg["model"].get("gamma", 2.0), alpha=cfg["model"].get("alpha", 0.25))
     else:
