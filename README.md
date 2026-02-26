@@ -37,6 +37,8 @@
 │   ├── metrics/
 │   ├── explain/
 │   └── utils/
+├── scripts/
+│   └── run_layer1_sweep.sh
 ├── train_multiclass.py
 ├── train_ordinal.py
 ├── train_regression.py
@@ -113,9 +115,52 @@ echo "{}" > configs/folds/limuc_5fold_patient.json
 
 ---
 
-## 5. 訓練
+## 5. Layer 1（粗搜）定義與成本估算
 
-### 5.1 Multi-class
+### 5.1 搜尋空間（目前設定）
+
+- `LR ∈ {1e-3, 3e-4}`（2 組）
+- `WD ∈ {1e-4, 1e-5}`（2 組）
+- `BS = 16`（固定 1 組）
+- `freeze_epochs ∈ {0, 5}`（2 組）
+
+### 5.2 組合數公式（已修正）
+
+Layer 1（粗搜）組合數：
+
+\[
+N_{L1} = |LR| \times |WD| \times |BS| \times |freeze| = 2 \times 2 \times 1 \times 2 = 8
+\]
+
+> 因此 Layer 1 應為 **8 組**，不是 16 組。
+
+### 5.3 訓練成本估算（避免排程錯誤）
+
+若每個組合跑完整 5-fold CV，且每次訓練平均耗時 `T` 小時：
+
+- 訓練次數：
+
+\[
+N_{train} = 8 \times 5 = 40
+\]
+
+- 總訓練時數：
+
+\[
+H_{total} = 40 \times T
+\]
+
+範例（若 `T = 1.5` 小時）：
+
+- 總訓練時數 `= 40 × 1.5 = 60` 小時。
+
+> 若後續目標必須回到 16 組，需新增一個維度（例如 `BS ∈ {16, 32}`），此時 `2 × 2 × 2 × 2 = 16`。
+
+---
+
+## 6. 訓練
+
+### 6.1 Multi-class
 
 ```bash
 python train_multiclass.py \
@@ -123,7 +168,7 @@ python train_multiclass.py \
   --fold 0
 ```
 
-### 5.2 Ordinal
+### 6.2 Ordinal
 
 ```bash
 python train_ordinal.py \
@@ -131,7 +176,7 @@ python train_ordinal.py \
   --fold 0
 ```
 
-### 5.3 Regression
+### 6.3 Regression
 
 ```bash
 python train_regression.py \
@@ -143,7 +188,7 @@ python train_regression.py \
 
 ---
 
-## 6. split 邏輯（目前實作）
+## 7. split 邏輯（目前實作）
 
 在 `src/data/folds.py`：
 
@@ -171,7 +216,7 @@ test_ds = LIMUCDataset(cfg, split="test")
 
 ---
 
-## 7. 輸出結果
+## 8. 輸出結果
 
 每次訓練輸出到：
 
@@ -184,7 +229,7 @@ results/<experiment_name>/fold_<k>/
 
 ---
 
-## 8. 結果彙整
+## 9. 結果彙整
 
 ```bash
 python analyze_results.py --experiment multiclass_resnet18_ce
@@ -198,7 +243,7 @@ python analyze_results.py --experiment multiclass_resnet18_ce
 
 ---
 
-## 9. Grad-CAM
+## 10. Grad-CAM
 
 ```bash
 python generate_cam.py \
@@ -215,7 +260,7 @@ results/<experiment_name>/fold_<k>/cam/
 
 ---
 
-## 10. 常見問題（FAQ）
+## 11. 常見問題（FAQ）
 
 ### Q1. 為什麼一開始就報 `Configured folds_file does not exist`？
 因為目前 config 驗證要求 fold cache 檔案存在。先建立空檔（內容 `{}`）即可，後續會自動覆寫成完整 split。
@@ -231,7 +276,7 @@ results/<experiment_name>/fold_<k>/cam/
 
 ---
 
-## 11. 快速開始（最短流程）
+## 12. 快速開始（最短流程）
 
 ```bash
 python -m venv .venv
