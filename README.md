@@ -190,7 +190,11 @@ results/<experiment_name>/fold_<k>/
 python analyze_results.py --experiment multiclass_resnet18_ce
 ```
 
-會讀取 `results/<experiment>/fold_*/metrics.json` 並輸出整體 summary（mean/std/cv）。
+會讀取 `results/<experiment>/fold_*/metrics.json` 並輸出整體 summary（mean/std/cv），同時預設寫入：
+- `results/<experiment>/cross_fold_summary.json`
+- `results/<experiment>/cross_fold_summary.csv`
+
+也可透過 `--output-json` 與 `--output-csv` 指定輸出路徑。
 
 ---
 
