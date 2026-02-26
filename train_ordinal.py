@@ -91,7 +91,13 @@ def main():
     elif loss_name == "corn":
         loss_fn = lambda logits, targets: ordinal_losses.corn_loss(logits, targets, num_classes=4)
     elif loss_name == "distance":
-        loss_fn = lambda logits, targets: ordinal_losses.distance_aware_loss(logits, targets, num_classes=4)
+        distance_alpha = cfg["model"].get("distance_alpha", 1.0)
+        loss_fn = lambda logits, targets: ordinal_losses.distance_aware_loss(
+            logits,
+            targets,
+            num_classes=4,
+            distance_alpha=distance_alpha,
+        )
     else:
         raise ValueError(f"Unknown loss {loss_name}")
 
