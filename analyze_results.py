@@ -10,7 +10,10 @@ def load_fold_metrics(exp_dir: Path):
     for fold_dir in sorted(exp_dir.glob("fold_*/metrics.json")):
         with open(fold_dir, "r") as f:
             hist = json.load(f)
-            metrics.append(hist[-1])
+            if not hist:
+                continue
+            best_epoch_metrics = max(hist, key=lambda m: m.get("qwk", float("-inf")))
+            metrics.append(best_epoch_metrics)
     return metrics
 
 
