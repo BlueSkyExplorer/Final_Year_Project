@@ -34,26 +34,58 @@ def build_model(cfg):
     return torch.nn.Sequential(backbone, head), paradigm
 
 
-def get_label_and_target_scores(outputs: torch.Tensor, paradigm: str):
+def get_predicted_labels(outputs: torch.Tensor, paradigm: str):
     if paradigm == "multiclass":
-        labels = outputs.argmax(dim=1)
-        return labels, None
+        return outputs.argmax(dim=1)
 
     if paradigm == "ordinal":
-        labels = ordinal_utils.coral_logits_to_label(outputs)
-        per_sample_scores = []
-        for sample_logits, sample_label in zip(outputs, labels):
-            if sample_label.item() == 0:
-                score = -sample_logits[0]
-            else:
-                positive_idx = sample_label.item() - 1
-                score = sample_logits[positive_idx]
-            per_sample_scores.append(score)
-        return labels, torch.stack(per_sample_scores)
+        return ordinal_utils.coral_logits_to_label(outputs)
 
     if paradigm == "regression":
-        labels = regression_to_class(outputs)
-        return labels, outputs
+        return regression_to_class(outputs)
+
+    raise ValueError(f"Unsupported paradigm for CAM generation: {paradigm}")
+
+
+def parse_target_classes(raw_target_classes: str, num_classes: int = 4):
+    if raw_target_classes.strip().lower() == "all":
+        return list(range(num_classes))
+
+    target_classes = []
+    for token in raw_target_classes.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        target_class = int(token)
+        if target_class < 0 or target_class >= num_classes:
+            raise ValueError(f"target class {target_class} is out of range [0, {num_classes - 1}]")
+        target_classes.append(target_class)
+
+    if not target_classes:
+        raise ValueError("No valid target class is provided")
+
+    return sorted(set(target_classes))
+
+
+def build_target_for_class(outputs: torch.Tensor, paradigm: str, target_class: int):
+    batch_size = outputs.size(0)
+    device = outputs.device
+    target_category = torch.full((batch_size,), target_class, dtype=torch.long, device=device)
+
+    if paradigm == "multiclass":
+        return target_category, None
+
+    if paradigm == "ordinal":
+        if target_class == 0:
+            target_scores = -outputs[:, 0]
+        else:
+            target_scores = outputs[:, target_class - 1]
+        return None, target_scores
+
+    if paradigm == "regression":
+        target_value = torch.full_like(outputs, float(target_class))
+        target_scores = -((outputs - target_value) ** 2).view(batch_size)
+        return None, target_scores
 
     raise ValueError(f"Unsupported paradigm for CAM generation: {paradigm}")
 
@@ -64,6 +96,11 @@ def main():
     parser.add_argument("--fold", type=int, default=0)
     parser.add_argument("--num_per_class", type=int, default=2)
     parser.add_argument("--split", default="test", choices=["train", "val", "test"])
+    parser.add_argument(
+        "--target_classes",
+        default="all",
+        help="CAM target classes. Use 'all' or comma-separated class ids (e.g., 0,1,2,3)",
+    )
     args = parser.parse_args()
 
     cfg = load_and_merge("configs/dataset/limuc.yaml", args.config)
@@ -85,7 +122,8 @@ def main():
     model.eval()
 
     cam_extractor = GradCAM(model)
-    saved = {i: 0 for i in range(4)}
+    target_classes = parse_target_classes(args.target_classes, num_classes=4)
+    saved = {target_class: 0 for target_class in target_classes}
     out_dir = Path(cfg["paths"].get("output_root", "results")) / exp_name / f"fold_{args.fold}" / "cam"
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -93,20 +131,26 @@ def main():
         images = images.to(device)
         with torch.no_grad():
             outputs = model(images)
-        pred_labels, target_scores = get_label_and_target_scores(outputs, paradigm)
+            pred_labels = get_predicted_labels(outputs, paradigm)
 
-        label = int(pred_labels.item())
-        if saved[label] >= args.num_per_class:
-            continue
+        pending_classes = [target_class for target_class in target_classes if saved[target_class] < args.num_per_class]
+        if not pending_classes:
+            break
 
-        cam = cam_extractor(images, target_scores=target_scores)[0].detach().cpu().numpy()
         img_np = cv2.cvtColor(cv2.imread(str(paths[0])), cv2.COLOR_BGR2RGB) / 255.0
-        cam_resized = cv2.resize(cam, (img_np.shape[1], img_np.shape[0]))
-        overlay = overlay_heatmap(img_np, cam_resized)
+        pred_label = int(pred_labels.item())
 
-        out_path = out_dir / f"MES{label}_{saved[label]}_{paradigm}_{args.split}.png"
-        cv2.imwrite(str(out_path), cv2.cvtColor((overlay * 255).astype(np.uint8), cv2.COLOR_RGB2BGR))
-        saved[label] += 1
+        for target_class in pending_classes:
+            target_category, target_scores = build_target_for_class(outputs, paradigm, target_class)
+            cam = cam_extractor(images, target_category=target_category, target_scores=target_scores)[0].detach().cpu().numpy()
+            cam_resized = cv2.resize(cam, (img_np.shape[1], img_np.shape[0]))
+            overlay = overlay_heatmap(img_np, cam_resized)
+
+            out_path = out_dir / (
+                f"target_MES{target_class}_pred_MES{pred_label}_{saved[target_class]}_{paradigm}_{args.split}.png"
+            )
+            cv2.imwrite(str(out_path), cv2.cvtColor((overlay * 255).astype(np.uint8), cv2.COLOR_RGB2BGR))
+            saved[target_class] += 1
 
         if all(v >= args.num_per_class for v in saved.values()):
             break
