@@ -1,6 +1,6 @@
 import logging
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Set
 import pandas as pd
 from torch.utils.data import Dataset
 from PIL import Image
@@ -9,16 +9,23 @@ from .transforms import build_transforms
 
 
 class LIMUCDataset(Dataset):
-    def __init__(self, cfg: Dict[str, Any], split: str = "train", fold_mapping: Dict[str, int] = None):
+    def __init__(self, cfg: Dict[str, Any], split: str = "train", fold_mapping=None, test_patients: Set[str] = None):
         self.cfg = cfg
         self.split = split
         self.data_root = Path(cfg["paths"]["data_root"])
-        self.fold_mapping = fold_mapping or load_fold_mapping(
-            cfg["paths"]["data_root"],
-            cfg["paths"]["folds_file"],
-            num_folds=cfg.get("cv", {}).get("num_folds", 5),
-            seed=cfg.get("seed", 42),
-        )
+
+        if fold_mapping is not None and test_patients is not None:
+            self.fold_mapping = fold_mapping
+            self.test_patients = test_patients
+        else:
+            self.fold_mapping, self.test_patients = load_fold_mapping(
+                cfg["paths"]["data_root"],
+                cfg["paths"]["folds_file"],
+                num_folds=cfg.get("cv", {}).get("num_folds", 5),
+                seed=cfg.get("seed", 42),
+                test_ratio=cfg.get("cv", {}).get("test_ratio", 0.2),
+            )
+
         self.current_fold = cfg.get("cv", {}).get("current_fold", 0)
         self.samples = self._build_table()
         self.transform = build_transforms(cfg, train=split == "train")
@@ -30,7 +37,20 @@ class LIMUCDataset(Dataset):
             if not patient_dir.is_dir():
                 continue
             patient_id = patient_dir.name
-            fold_idx = self.fold_mapping.get(patient_id, 0)
+
+            # Route patient to correct split
+            if patient_id in self.test_patients:
+                if self.split != "test":
+                    continue
+            else:
+                fold_idx = self.fold_mapping.get(patient_id, 0)
+                if self.split == "train" and fold_idx == self.current_fold:
+                    continue
+                if self.split == "val" and fold_idx != self.current_fold:
+                    continue
+                if self.split == "test":
+                    continue
+
             for label in range(4):
                 class_dir = patient_dir / f"Mayo {label}"
                 if not class_dir.exists() or not class_dir.is_dir():
@@ -47,19 +67,14 @@ class LIMUCDataset(Dataset):
                         "image_path": img_path,
                         "label": label,
                         "patient_id": patient_id,
-                        "fold": fold_idx,
+                        "fold": self.fold_mapping.get(patient_id, -1),
                     })
+
         if not rows:
             logger.error("No image samples found in data_root '%s' for split '%s'", self.data_root, self.split)
             raise ValueError(f"No image samples found in data_root '{self.data_root}' for split '{self.split}'")
 
-        df = pd.DataFrame(rows)
-        if self.split == "train":
-            return df[df["fold"] != self.current_fold].reset_index(drop=True)
-        elif self.split == "val":
-            return df[df["fold"] == self.current_fold].reset_index(drop=True)
-        else:
-            return df.reset_index(drop=True)
+        return pd.DataFrame(rows)
 
     def __len__(self):
         return len(self.samples)
