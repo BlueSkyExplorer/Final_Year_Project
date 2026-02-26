@@ -227,7 +227,7 @@ python scripts/run_layer1_sweep.py \
 4. 只有 top 組進入該 loss 的完整 5-fold。
 5. 結果表明確標註 `hp_source`：`shared_hp` 或 `per_loss_tuned`，避免報告解讀混淆。
 
-可使用下列 orchestrator 執行：
+可使用下列 orchestrator 執行（會繼承啟動 `run_loss_comparison.py` 的 Python 解譯器與環境）：
 
 ```bash
 python scripts/run_loss_comparison.py \

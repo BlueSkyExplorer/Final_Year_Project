@@ -7,6 +7,7 @@ import itertools
 import json
 import statistics
 import subprocess
+import sys
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -194,8 +195,8 @@ def build_candidates(
 
 
 def run_train(script: str, config_path: Path, fold: int) -> TrainRunResult:
-    cmd = ["python", script, "--config", str(config_path), "--fold", str(fold)]
-    print("[RUN]", " ".join(cmd))
+    cmd = [sys.executable, script, "--config", str(config_path), "--fold", str(fold)]
+    print("[RUN]", " ".join(repr(part) for part in cmd))
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode == 0:
         return TrainRunResult(status="completed")
@@ -295,7 +296,12 @@ def write_csv(path: Path, rows: List[dict]) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Per-loss tuning before formal 5-fold loss comparison.")
+    parser = argparse.ArgumentParser(
+        description=(
+            "Per-loss tuning before formal 5-fold loss comparison. "
+            "Training subprocesses inherit the same Python interpreter/environment that launches this script."
+        )
+    )
     parser.add_argument("--configs", nargs="+", required=True, help="Experiment config yaml paths for each loss.")
     parser.add_argument("--baseline-lr", type=float, required=True)
     parser.add_argument("--baseline-wd", type=float, required=True)
