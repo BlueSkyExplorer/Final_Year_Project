@@ -76,10 +76,8 @@ def build_target_for_class(outputs: torch.Tensor, paradigm: str, target_class: i
         return target_category, None
 
     if paradigm == "ordinal":
-        if target_class == 0:
-            target_scores = -outputs[:, 0]
-        else:
-            target_scores = outputs[:, target_class - 1]
+        class_probs = ordinal_utils._ordinal_logits_to_class_probs(outputs, num_classes=4)
+        target_scores = class_probs[:, target_class]
         return None, target_scores
 
     if paradigm == "regression":
