@@ -222,13 +222,17 @@ python scripts/run_loss_comparison.py \
   --baseline-batch-size 16 \
   --lr-grid 1e-4,3e-4,1e-3 \
   --wd-grid 1e-5,1e-4,3e-4 \
+  --prefer-per-loss \
+  --prefer-margin 0.005 \
   --top-k 2
 ```
+
+> `--prefer-per-loss` 為 soft preference：僅在 preview 分數接近時（由 `--prefer-margin` 控制）對 `per_loss_tuned` 給予輕微加成；分數差距明顯時仍以實際分數排名。
 
 輸出目錄（`results/loss_comparison/per_loss_tuning_<timestamp>/`）包含：
 
 - `preview_ranking.csv`：fold 0/1 小網格排名（含 `hp_source`）
-- `selected_candidates.csv`：每個 loss 晉級到 full 5-fold 的 top 候選
+- `selected_candidates.csv`：每個 loss 晉級到 full 5-fold 的 top 候選（含 `selection_reason`）
 - `final_5fold_summary.csv`：最終 5-fold 結果表（含 `hp_source`）
 
 ---
