@@ -31,11 +31,16 @@ class GradCAM:
         self.target_layer.register_forward_hook(forward_hook)
         self.target_layer.register_full_backward_hook(backward_hook)
 
-    def __call__(self, input_tensor, target_category=None):
+    def __call__(self, input_tensor, target_category=None, target_scores=None):
         output = self.model(input_tensor)
-        if target_category is None:
-            target_category = output.argmax(dim=1)
-        loss = output[range(output.size(0)), target_category]
+        if target_scores is not None:
+            loss = target_scores
+        elif output.ndim == 1:
+            loss = output
+        else:
+            if target_category is None:
+                target_category = output.argmax(dim=1)
+            loss = output[range(output.size(0)), target_category]
         self.model.zero_grad()
         loss.backward(torch.ones_like(loss))
 
