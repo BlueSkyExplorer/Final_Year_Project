@@ -217,8 +217,13 @@ def append_registry_record(registry_path: Path, record: dict) -> None:
         f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
+def normalize_loss_config_path(path_like: str | Path) -> str:
+    return str(Path(path_like).resolve())
+
+
 def load_registry(registry_path: Path) -> Dict[tuple, dict]:
     records: Dict[tuple, dict] = {}
+    legacy_records = 0
     if not registry_path.exists():
         return records
 
@@ -236,9 +241,44 @@ def load_registry(registry_path: Path) -> Dict[tuple, dict]:
                 fold_int = int(fold)
             except (TypeError, ValueError):
                 continue
-            key = (str(rec.get("experiment_name")), fold_int)
+
+            experiment_name = str(rec.get("experiment_name"))
+            raw_loss_config = rec.get("loss_config")
+            if raw_loss_config:
+                normalized_loss_config = normalize_loss_config_path(raw_loss_config)
+                rec["loss_config"] = normalized_loss_config
+                key = (normalized_loss_config, experiment_name, fold_int)
+            else:
+                legacy_records += 1
+                key = (experiment_name, fold_int)
             records[key] = rec
+
+    if legacy_records:
+        print(
+            f"[WARN] Loaded {legacy_records} legacy registry record(s) without loss_config; "
+            "resume will fallback to (experiment_name, fold) and may be ambiguous across configs."
+        )
     return records
+
+
+def get_registry_record(
+    registry_state: Dict[tuple, dict],
+    *,
+    loss_config: str,
+    experiment_name: str,
+    fold: int,
+) -> dict | None:
+    key = (loss_config, experiment_name, fold)
+    if key in registry_state:
+        return registry_state[key]
+
+    legacy_key = (experiment_name, fold)
+    legacy_rec = registry_state.get(legacy_key)
+    if legacy_rec is not None:
+        print(
+            f"[WARN] Fallback to legacy registry key for experiment={experiment_name}, fold={fold}."
+        )
+    return legacy_rec
 
 
 
@@ -341,6 +381,7 @@ def main() -> None:
 
     for cfg_path_str in args.configs:
         cfg_path = Path(cfg_path_str)
+        normalized_cfg_path = normalize_loss_config_path(cfg_path)
         cfg = load_yaml(cfg_path)
         paradigm = cfg.get("model", {}).get("paradigm", "")
         train_script = TRAIN_SCRIPT_BY_PARADIGM.get(paradigm)
@@ -367,8 +408,13 @@ def main() -> None:
             exp_name = cand.experiment_name
             failed_folds: List[str] = []
             for fold in preview_folds:
-                key = (exp_name, fold)
-                existing = registry_state.get(key)
+                key = (normalized_cfg_path, exp_name, fold)
+                existing = get_registry_record(
+                    registry_state,
+                    loss_config=normalized_cfg_path,
+                    experiment_name=exp_name,
+                    fold=fold,
+                )
                 if existing and existing.get("status") == "completed":
                     print(f"[SKIP] {exp_name} fold={fold} already completed")
                     continue
@@ -377,7 +423,7 @@ def main() -> None:
                 record = {
                     "timestamp": datetime.now().isoformat(timespec="seconds"),
                     "stage": "preview",
-                    "loss_config": str(cfg_path),
+                    "loss_config": normalized_cfg_path,
                     "experiment_name": exp_name,
                     "candidate_id": cand.candidate_id,
                     "fold": fold,
@@ -423,8 +469,13 @@ def main() -> None:
             cand = exp_to_candidate[chosen_exp]
             final_failed_folds: List[str] = []
             for fold in full_folds:
-                key = (chosen_exp, fold)
-                existing = registry_state.get(key)
+                key = (normalized_cfg_path, chosen_exp, fold)
+                existing = get_registry_record(
+                    registry_state,
+                    loss_config=normalized_cfg_path,
+                    experiment_name=chosen_exp,
+                    fold=fold,
+                )
                 if existing and existing.get("status") == "completed":
                     print(f"[SKIP] {chosen_exp} fold={fold} already completed")
                     continue
@@ -433,7 +484,7 @@ def main() -> None:
                 record = {
                     "timestamp": datetime.now().isoformat(timespec="seconds"),
                     "stage": "full",
-                    "loss_config": str(cfg_path),
+                    "loss_config": normalized_cfg_path,
                     "experiment_name": chosen_exp,
                     "candidate_id": cand.candidate_id,
                     "fold": fold,
