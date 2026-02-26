@@ -8,6 +8,7 @@ from src.utils.seed import set_seed
 from src.utils.logging import setup_logging, get_logger
 from src.utils.paths import resolve_output_dir
 from src.utils.data_checks import ensure_dataset_not_empty
+from src.utils.lr_scheduler import build_lr_scheduler
 from src.data.limuc_dataset import LIMUCDataset
 from src.models.backbones import build_backbone, get_backbone_output_dim
 from src.models.heads import OrdinalHead
@@ -108,6 +109,8 @@ def main():
     else:
         optimizer = torch.optim.Adam(model.parameters(), lr=base_lr, weight_decay=weight_decay)
 
+    scheduler, scheduler_on_val = build_lr_scheduler(optimizer, training_cfg, num_epochs)
+
     best_qwk = -1
     history = []
     for epoch in range(num_epochs):
@@ -119,11 +122,18 @@ def main():
                 {"params": head.parameters(), "lr": base_lr},
             ]
             optimizer = torch.optim.Adam(param_groups, lr=base_lr, weight_decay=weight_decay)
+            scheduler, scheduler_on_val = build_lr_scheduler(optimizer, training_cfg, num_epochs - epoch)
 
         train_loss = train_one_epoch(model, train_loader, loss_fn, optimizer, device)
         val_loss, metrics = validate(model, val_loader, loss_fn, device)
         history.append({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss, **metrics})
-        logger.info(f"Epoch {epoch}: train_loss={train_loss:.4f} val_loss={val_loss:.4f} qwk={metrics['qwk']:.4f}")
+        if scheduler is not None:
+            if scheduler_on_val:
+                scheduler.step(val_loss)
+            else:
+                scheduler.step()
+        current_lrs = [group["lr"] for group in optimizer.param_groups]
+        logger.info(f"Epoch {epoch}: train_loss={train_loss:.4f} val_loss={val_loss:.4f} qwk={metrics['qwk']:.4f} lr={current_lrs}")
         if metrics["qwk"] > best_qwk:
             best_qwk = metrics["qwk"]
             torch.save(model.state_dict(), Path(output_dir) / "best_model.pt")
