@@ -303,6 +303,11 @@ def main() -> None:
     parser.add_argument("--preview-folds", type=str, default="0,1")
     parser.add_argument("--full-folds", type=str, default="0,1,2,3,4")
     parser.add_argument("--top-k", type=int, default=2)
+    parser.add_argument(
+        "--prefer-per-loss",
+        action="store_true",
+        help="Prefer per_loss_tuned candidates first during preview selection.",
+    )
     parser.add_argument("--output-root", type=str, default="results/loss_comparison")
     parser.add_argument("--run-dir", type=str, default="", help="Existing run dir for resume.")
     args = parser.parse_args()
@@ -389,19 +394,13 @@ def main() -> None:
         )
         all_preview_rows.extend(preview_rows)
 
-        tuned_rows = [
-            r
-            for r in preview_rows
-            if r["hp_source"] == "per_loss_tuned" and r.get("status", "completed") == "completed"
-        ]
-        if not tuned_rows:
-            tuned_rows = [
-                r
-                for r in preview_rows
-                if r["hp_source"] == "shared_hp" and r.get("status", "completed") == "completed"
-            ]
-
-        picked = tuned_rows[: max(1, args.top_k)]
+        completed_rows = [r for r in preview_rows if r.get("status", "completed") == "completed"]
+        if args.prefer_per_loss:
+            preferred_rows = [r for r in completed_rows if r["hp_source"] == "per_loss_tuned"]
+            fallback_rows = [r for r in completed_rows if r["hp_source"] != "per_loss_tuned"]
+            picked = (preferred_rows + fallback_rows)[: max(1, args.top_k)]
+        else:
+            picked = completed_rows[: max(1, args.top_k)]
         selected_rows.extend(picked)
 
         for chosen in picked:
