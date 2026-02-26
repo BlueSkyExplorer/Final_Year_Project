@@ -58,4 +58,6 @@ def distance_aware_loss(logits: torch.Tensor, targets: torch.Tensor, num_classes
 
     class_indices = torch.arange(num_classes, device=logits.device).unsqueeze(0)
     distance_weights = torch.abs(class_indices - targets.unsqueeze(1).long()).float()
-    return torch.mean(torch.sum(distance_weights * -torch.log(probs + 1e-6), dim=1))
+    wrong_class_mask = 1.0 - F.one_hot(targets.long(), num_classes=num_classes).float()
+    penalty = -torch.log1p(-(probs.clamp(max=1 - 1e-6)))
+    return torch.mean(torch.sum(distance_weights * wrong_class_mask * penalty, dim=1))
