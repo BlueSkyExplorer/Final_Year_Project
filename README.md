@@ -39,7 +39,8 @@
 │   └── utils/
 ├── scripts/
 │   ├── run_layer1_sweep.py
-│   └── run_layer1_sweep.sh   # Unix-only legacy wrapper
+│   ├── run_loss_comparison.py
+│   └── merge_results.py
 ├── train_multiclass.py
 ├── train_ordinal.py
 ├── train_regression.py
@@ -191,8 +192,6 @@ H_{total} = 16 \times T
 
 `run_layer1_sweep.py` 支援以 `MEMBER_ID` 做靜態任務切分（`A/B/C/ALL`），並會依 `BASE_CONFIG` 的 `model.paradigm` 自動選擇對應訓練腳本（multi-class / ordinal / regression）。
 
-> `run_layer1_sweep.sh` 保留為 Unix-only 舊版入口；建議優先使用跨平台的 Python 版本。
-
 ```bash
 # 成員 A：只跑 freeze=0 的 Layer 1 組合
 python scripts/run_layer1_sweep.py --member-id A
@@ -275,24 +274,12 @@ python scripts/merge_results.py   memberA/results/sweeps/layer1_layer2_xxx   mem
 
 以下為目前常用腳本的作業系統支援情況：
 
-1. `scripts/run_layer1_sweep.sh`：**Unix shell only**（Linux/macOS/WSL/Git Bash）。
-2. `scripts/run_loss_comparison.py`、`scripts/merge_results.py`：**Windows/Linux/macOS 可用**。
-3. Windows 建議啟動方式（PowerShell + venv）：
-
-```powershell
-python scripts/run_loss_comparison.py ...
-```
-
-4. 若保留 `.sh` 流程，可在 Windows 以 WSL 執行替代指令：
-
-```bash
-wsl bash scripts/run_layer1_sweep.sh
-```
-
-> 若專案提供（或新增）Python 版 sweep（如 `scripts/run_layer1_sweep.py`），建議將其作為 Windows 首選流程：
+1. `scripts/run_layer1_sweep.py`、`scripts/run_loss_comparison.py`、`scripts/merge_results.py`：**Windows/Linux/macOS 可用**。
+2. Windows 建議啟動方式（PowerShell + venv）：
 
 ```powershell
 python scripts/run_layer1_sweep.py --member-id A
+python scripts/run_loss_comparison.py ...
 ```
 
 ---
