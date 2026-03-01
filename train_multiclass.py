@@ -42,6 +42,16 @@ def set_requires_grad(module, requires_grad: bool):
         param.requires_grad = requires_grad
 
 
+def get_param_group_lrs(optimizer, freeze_epochs: int, epoch: int):
+    if len(optimizer.param_groups) == 1:
+        name = "head" if freeze_epochs > 0 and epoch < freeze_epochs else "all"
+        return {name: optimizer.param_groups[0]["lr"]}
+    return {
+        "head": optimizer.param_groups[0]["lr"],
+        "backbone": optimizer.param_groups[1]["lr"],
+    }
+
+
 def validate(model, loader, criterion, device):
     ensure_dataset_not_empty(loader, "Validation")
     model.eval()
@@ -132,12 +142,22 @@ def main():
         if freeze_epochs > 0 and epoch == freeze_epochs:
             logger.info("Unfreezing backbone for fine-tuning")
             set_requires_grad(backbone, True)
-            param_groups = [
-                {"params": backbone.parameters(), "lr": backbone_lr},
-                {"params": head.parameters(), "lr": base_lr},
-            ]
-            optimizer = torch.optim.Adam(param_groups, lr=base_lr, weight_decay=weight_decay)
-            scheduler, scheduler_on_val = build_lr_scheduler(optimizer, training_cfg, num_epochs - epoch)
+            head_lr_before_unfreeze = optimizer.param_groups[0]["lr"]
+            optimizer.add_param_group({"params": backbone.parameters(), "lr": backbone_lr})
+            optimizer.param_groups[0]["lr"] = head_lr_before_unfreeze
+            logger.info(
+                "Unfreeze transition lr continuity: head(before)=%.8f, head(after)=%.8f, backbone(start)=%.8f",
+                head_lr_before_unfreeze,
+                optimizer.param_groups[0]["lr"],
+                optimizer.param_groups[1]["lr"],
+            )
+            if scheduler is not None:
+                scheduler, scheduler_on_val = build_lr_scheduler(
+                    optimizer,
+                    training_cfg,
+                    num_epochs,
+                    last_epoch=epoch - 1,
+                )
 
         train_loss = train_one_epoch(model, train_loader, criterion, optimizer, device)
         val_loss, metrics, preds, targets = validate(model, val_loader, criterion, device)
@@ -147,8 +167,11 @@ def main():
                 scheduler.step(val_loss)
             else:
                 scheduler.step()
-        current_lrs = [group["lr"] for group in optimizer.param_groups]
-        logger.info(f"Epoch {epoch}: train_loss={train_loss:.4f} val_loss={val_loss:.4f} qwk={metrics['qwk']:.4f} lr={current_lrs}")
+        current_lrs = get_param_group_lrs(optimizer, freeze_epochs, epoch)
+        logger.info(
+            f"Epoch {epoch}: train_loss={train_loss:.4f} val_loss={val_loss:.4f} "
+            f"qwk={metrics['qwk']:.4f} param_group_lrs={current_lrs}"
+        )
         if metrics["qwk"] > best_qwk + early_stopping_min_delta:
             best_qwk = metrics["qwk"]
             epochs_without_improvement = 0

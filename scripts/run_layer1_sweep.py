@@ -39,6 +39,10 @@ MEMBER_GRIDS: dict[str, MemberGrid] = {
     "C": MemberGrid(lrs=[1e-4, 5e-5], wds=[1e-4, 1e-5], freeze_epochs=[0, 5]),
     "ALL": MemberGrid(lrs=[1e-3, 3e-4], wds=[1e-4, 1e-5], freeze_epochs=[0, 5]),
 }
+# Analysis note:
+# freeze_epochs=5 should not be interpreted as a pure hyper-parameter effect.
+# If train scripts accidentally reset scheduler/param-group LR at unfreeze, ranking can be
+# confounded by training-flow side effects instead of the freeze setting itself.
 
 
 def parse_args() -> argparse.Namespace:
