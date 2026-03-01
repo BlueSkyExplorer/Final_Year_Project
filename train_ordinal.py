@@ -74,7 +74,7 @@ def _register_new_group_with_scheduler(scheduler, optimizer, backbone_lr: float,
         scheduler.optimizer = optimizer
 
 
-def validate(model, loader, loss_fn, device, decode_fn):
+def validate(model, loader, loss_fn, device, decode_fn, proba_fn, auroc_source):
     ensure_dataset_not_empty(loader, "Validation")
     model.eval()
     total_loss = 0.0
@@ -86,12 +86,13 @@ def validate(model, loader, loss_fn, device, decode_fn):
             loss = loss_fn(logits, labels)
             total_loss += loss.item() * images.size(0)
             pred_labels = decode_fn(logits)
-            class_probs = ordinal_utils._ordinal_logits_to_class_probs(logits, num_classes=4)
+            class_probs = proba_fn(logits, num_classes=4)
             preds.extend(pred_labels.cpu().tolist())
             targets.extend(labels.cpu().tolist())
             probas.append(class_probs.cpu())
     y_proba = torch.cat(probas, dim=0).numpy()
     metrics = evaluate_all(targets, preds, y_proba=y_proba)
+    metrics["auroc_source"] = auroc_source
     return total_loss / len(loader.dataset), metrics
 
 
@@ -140,9 +141,13 @@ def main():
     if loss_name == "coral":
         loss_fn = lambda logits, targets: ordinal_losses.coral_loss(logits, targets, num_classes=4)
         decode_fn = ordinal_utils.coral_logits_to_label
+        proba_fn = ordinal_utils._ordinal_logits_to_class_probs
+        auroc_source = "ordinal_class_probs_coral"
     elif loss_name == "corn":
         loss_fn = lambda logits, targets: ordinal_losses.corn_loss(logits, targets, num_classes=4)
         decode_fn = ordinal_utils.corn_logits_to_label
+        proba_fn = ordinal_utils.corn_logits_to_class_probs
+        auroc_source = "ordinal_class_probs_corn"
     elif loss_name == "distance":
         alpha = cfg["model"].get("alpha", 1.0)
         logger.info(f"Using distance-aware CDW-CE loss with alpha={alpha}")
@@ -153,6 +158,8 @@ def main():
             alpha=alpha,
         )
         decode_fn = ordinal_utils.coral_logits_to_label
+        proba_fn = ordinal_utils._ordinal_logits_to_class_probs
+        auroc_source = "ordinal_class_probs_coral"
     else:
         raise ValueError(f"Unknown loss {loss_name}")
     logger.info("Using loss '%s' with decoder '%s'", loss_name, decode_fn.__name__)
@@ -226,7 +233,15 @@ def main():
             )
 
         train_loss = train_one_epoch(model, train_loader, loss_fn, optimizer, device)
-        val_loss, metrics = validate(model, val_loader, loss_fn, device, decode_fn)
+        val_loss, metrics = validate(
+            model,
+            val_loader,
+            loss_fn,
+            device,
+            decode_fn,
+            proba_fn,
+            auroc_source,
+        )
         assert "auroc_source" in metrics, "validate() must provide auroc_source in metrics"
         history.append({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss, **metrics})
         if scheduler is not None:
