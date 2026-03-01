@@ -56,16 +56,18 @@ def validate(model, loader, criterion, device):
     ensure_dataset_not_empty(loader, "Validation")
     model.eval()
     total_loss = 0.0
-    preds, targets = [], []
+    preds, targets, probas = [], [], []
     with torch.no_grad():
         for images, labels, _, _ in loader:
             images, labels = images.to(device), labels.to(device)
             outputs = model(images)
+            probs = torch.softmax(outputs, dim=1)
             loss = criterion(outputs, labels)
             total_loss += loss.item() * images.size(0)
             preds.extend(outputs.argmax(dim=1).cpu().tolist())
             targets.extend(labels.cpu().tolist())
-    metrics = evaluate_all(targets, preds)
+            probas.extend(probs.cpu().tolist())
+    metrics = evaluate_all(targets, preds, y_proba=probas)
     return total_loss / len(loader.dataset), metrics, preds, targets
 
 
@@ -161,7 +163,15 @@ def main():
 
         train_loss = train_one_epoch(model, train_loader, criterion, optimizer, device)
         val_loss, metrics, preds, targets = validate(model, val_loader, criterion, device)
-        history.append({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss, **metrics})
+        history.append(
+            {
+                "epoch": epoch,
+                "train_loss": train_loss,
+                "val_loss": val_loss,
+                "auroc_source": "probability",
+                **metrics,
+            }
+        )
         if scheduler is not None:
             if scheduler_on_val:
                 scheduler.step(val_loss)
