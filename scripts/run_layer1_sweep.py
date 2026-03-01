@@ -31,13 +31,14 @@ class MemberGrid:
     lrs: list[float]
     wds: list[float]
     freeze_epochs: list[int]
+    head_dropouts: list[float]
 
 
 MEMBER_GRIDS: dict[str, MemberGrid] = {
-    "A": MemberGrid(lrs=[1e-3, 3e-4], wds=[1e-4, 1e-5], freeze_epochs=[0]),
-    "B": MemberGrid(lrs=[1e-3, 3e-4], wds=[1e-4, 1e-5], freeze_epochs=[5]),
-    "C": MemberGrid(lrs=[1e-4, 5e-5], wds=[1e-4, 1e-5], freeze_epochs=[0, 5]),
-    "ALL": MemberGrid(lrs=[1e-3, 3e-4], wds=[1e-4, 1e-5], freeze_epochs=[0, 5]),
+    "A": MemberGrid(lrs=[1e-3, 3e-4], wds=[1e-4, 1e-5], freeze_epochs=[0], head_dropouts=[0.0, 0.3]),
+    "B": MemberGrid(lrs=[1e-3, 3e-4], wds=[1e-4, 1e-5], freeze_epochs=[5], head_dropouts=[0.0, 0.3]),
+    "C": MemberGrid(lrs=[1e-4, 5e-5], wds=[1e-4, 1e-5], freeze_epochs=[0, 5], head_dropouts=[0.0, 0.3]),
+    "ALL": MemberGrid(lrs=[1e-3, 3e-4], wds=[1e-4, 1e-5], freeze_epochs=[0, 5], head_dropouts=[0.0, 0.3]),
 }
 # Analysis note:
 # freeze_epochs=5 should not be interpreted as a pure hyper-parameter effect.
@@ -76,11 +77,14 @@ def build_config(
     lr: float,
     wd: float,
     freeze_epochs: int,
+    head_dropout: float,
     out_cfg: Path,
     batch_size: int,
 ) -> None:
     cfg = yaml.safe_load(base_config.read_text(encoding="utf-8"))
     cfg["experiment_name"] = exp_name
+    cfg.setdefault("model", {})
+    cfg["model"]["head_dropout"] = float(head_dropout)
     cfg.setdefault("training", {})
     cfg["training"]["learning_rate"] = float(lr)
     cfg["training"]["lr"] = float(lr)
@@ -101,8 +105,8 @@ def append_registry_row(registry_path: Path, row: dict[str, Any]) -> None:
         f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
-def read_registry_latest(registry_path: Path) -> dict[tuple[str, float, float, int, int], dict[str, Any]]:
-    latest: dict[tuple[str, float, float, int, int], dict[str, Any]] = {}
+def read_registry_latest(registry_path: Path) -> dict[tuple[str, float, float, int, float, int], dict[str, Any]]:
+    latest: dict[tuple[str, float, float, int, float, int], dict[str, Any]] = {}
     if not registry_path.exists():
         return latest
     ignored_rows = 0
@@ -121,6 +125,7 @@ def read_registry_latest(registry_path: Path) -> dict[tuple[str, float, float, i
                 float(row.get("lr")),
                 float(row.get("weight_decay")),
                 int(row.get("freeze_epochs")),
+                float(row.get("head_dropout", 0.0)),
                 int(row.get("fold")),
             )
         except (TypeError, ValueError):
@@ -140,10 +145,11 @@ def should_skip_completed_fold(
     lr: float,
     wd: float,
     freeze_epochs: int,
+    head_dropout: float,
     fold: int,
 ) -> bool:
     latest = read_registry_latest(registry_path)
-    row = latest.get((phase, float(lr), float(wd), int(freeze_epochs), int(fold)))
+    row = latest.get((phase, float(lr), float(wd), int(freeze_epochs), float(head_dropout), int(fold)))
     return bool(row and row.get("status") == "completed")
 
 
@@ -181,6 +187,7 @@ def run_single_fold_with_guard(
     lr: float,
     wd: float,
     freeze_epochs: int,
+    head_dropout: float,
     fold: int,
     base_config: Path,
     train_script: str,
@@ -200,6 +207,7 @@ def run_single_fold_with_guard(
             lr=lr,
             wd=wd,
             freeze_epochs=freeze_epochs,
+            head_dropout=head_dropout,
             out_cfg=cfg_path,
             batch_size=current_bs,
         )
@@ -238,6 +246,7 @@ def run_single_fold_with_guard(
             "lr": float(lr),
             "weight_decay": float(wd),
             "freeze_epochs": int(freeze_epochs),
+            "head_dropout": float(head_dropout),
             "fold": int(fold),
             "metric": best_metric,
             "status": run_status,
@@ -256,6 +265,7 @@ def run_combo_all_folds(**kwargs: Any) -> None:
             lr=kwargs["lr"],
             wd=kwargs["wd"],
             freeze_epochs=kwargs["freeze_epochs"],
+            head_dropout=kwargs["head_dropout"],
             fold=fold,
         ):
             print(f"  -> fold {fold} already completed in registry, skip (resume).")
@@ -287,16 +297,17 @@ def summarize_layer1(sweep_dir: Path, registry_path: Path) -> None:
     latest = read_registry_latest(registry_path)
     rows: list[dict[str, Any]] = []
     for combo in load_tsv_rows(sweep_dir / "layer1_combos.tsv"):
-        exp_name, lr, wd, frz = combo
+        exp_name, lr, wd, frz, head_dropout = combo
         lr_f = float(lr)
         wd_f = float(wd)
         frz_i = int(frz)
+        head_dropout_f = float(head_dropout)
 
         fold_qwks: dict[int, float] = {}
         failed_reasons: list[str] = []
         fold_states: list[str] = []
         for fold in EVAL_FOLDS:
-            rec = latest.get(("layer1", lr_f, wd_f, frz_i, fold))
+            rec = latest.get(("layer1", lr_f, wd_f, frz_i, head_dropout_f, fold))
             if not rec:
                 failed_reasons.append(f"fold_{fold}:not_run")
                 fold_states.append("not_run")
@@ -327,6 +338,7 @@ def summarize_layer1(sweep_dir: Path, registry_path: Path) -> None:
                 "lr": lr_f,
                 "weight_decay": wd_f,
                 "freeze_epochs": frz_i,
+                "head_dropout": head_dropout_f,
                 "fold0_qwk": fold_qwks.get(0),
                 "fold1_qwk": fold_qwks.get(1),
                 "mean_qwk": mean_qwk,
@@ -364,6 +376,7 @@ def summarize_layer1(sweep_dir: Path, registry_path: Path) -> None:
             "lr",
             "weight_decay",
             "freeze_epochs",
+            "head_dropout",
             "fold0_qwk",
             "fold1_qwk",
             "mean_qwk",
@@ -407,6 +420,7 @@ def build_layer2_expansions(sweep_dir: Path) -> list[dict[str, Any]]:
         base_lr = float(p["lr"])
         base_wd = float(p["weight_decay"])
         frz = int(p["freeze_epochs"])
+        head_dropout = float(p.get("head_dropout", 0.0))
 
         i = nearest_idx(LAYER2_LRS, base_lr)
         j = nearest_idx(LAYER2_WDS, base_wd)
@@ -424,12 +438,18 @@ def build_layer2_expansions(sweep_dir: Path) -> list[dict[str, Any]]:
                         "lr": lr2,
                         "weight_decay": wd2,
                         "freeze_epochs": frz,
+                        "head_dropout": head_dropout,
                     }
                 )
 
     uniq: dict[tuple[float, float, int], dict[str, Any]] = {}
     for entry in expansions:
-        key = (float(entry["lr"]), float(entry["weight_decay"]), int(entry["freeze_epochs"]))
+        key = (
+            float(entry["lr"]),
+            float(entry["weight_decay"]),
+            int(entry["freeze_epochs"]),
+            float(entry.get("head_dropout", 0.0)),
+        )
         if key not in uniq:
             uniq[key] = entry
 
@@ -473,7 +493,7 @@ def main() -> None:
     )
     print(
         f"[Config] Layer1 LRs={member_grid.lrs} WDs={member_grid.wds} "
-        f"FREEZE_EPOCHS={member_grid.freeze_epochs}"
+        f"FREEZE_EPOCHS={member_grid.freeze_epochs} HEAD_DROPOUTS={member_grid.head_dropouts}"
     )
 
     with tempfile.TemporaryDirectory() as tmp_dir_raw:
@@ -487,29 +507,33 @@ def main() -> None:
         for lr in member_grid.lrs:
             for wd in member_grid.wds:
                 for frz in member_grid.freeze_epochs:
-                    combo_idx += 1
-                    exp_name = f"layer1_{run_tag}_combo_{combo_idx}"
-                    combo_cfg = tmp_dir / f"{exp_name}.yaml"
+                    for head_dropout in member_grid.head_dropouts:
+                        combo_idx += 1
+                        exp_name = f"layer1_{run_tag}_combo_{combo_idx}"
+                        combo_cfg = tmp_dir / f"{exp_name}.yaml"
 
-                    print(f"[Layer1 {combo_idx}] lr={lr}, wd={wd}, batch_size={BATCH_SIZE}, freeze_epochs={frz}")
-                    run_combo_all_folds(
-                        phase="layer1",
-                        exp_name=exp_name,
-                        cfg_path=combo_cfg,
-                        lr=lr,
-                        wd=wd,
-                        freeze_epochs=frz,
-                        base_config=base_config,
-                        train_script=train_script,
-                        result_root=result_root,
-                        sweep_dir=sweep_dir,
-                        registry_path=registry_path,
-                    )
+                        print(
+                            f"[Layer1 {combo_idx}] lr={lr}, wd={wd}, batch_size={BATCH_SIZE}, "
+                            f"freeze_epochs={frz}, head_dropout={head_dropout}"
+                        )
+                        run_combo_all_folds(
+                            phase="layer1",
+                            exp_name=exp_name,
+                            cfg_path=combo_cfg,
+                            lr=lr,
+                            wd=wd,
+                            freeze_epochs=frz,
+                            head_dropout=head_dropout,
+                            base_config=base_config,
+                            train_script=train_script,
+                            result_root=result_root,
+                            sweep_dir=sweep_dir,
+                            registry_path=registry_path,
+                        )
 
-                    if exp_name not in existing_combo_names:
-                        combo_rows.append([exp_name, str(lr), str(wd), str(frz)])
-                        existing_combo_names.add(exp_name)
-
+                        if exp_name not in existing_combo_names:
+                            combo_rows.append([exp_name, str(lr), str(wd), str(frz), str(head_dropout)])
+                            existing_combo_names.add(exp_name)
         write_tsv_rows(combos_path, combo_rows)
 
         summarize_layer1(sweep_dir, registry_path)
@@ -525,8 +549,12 @@ def main() -> None:
             lr = float(cfg["lr"])
             wd = float(cfg["weight_decay"])
             frz = int(cfg["freeze_epochs"])
+            head_dropout = float(cfg.get("head_dropout", 0.0))
 
-            print(f"[Layer2 {idx}/{len(layer2)}] lr={lr}, wd={wd}, freeze_epochs={frz}")
+            print(
+                f"[Layer2 {idx}/{len(layer2)}] lr={lr}, wd={wd}, "
+                f"freeze_epochs={frz}, head_dropout={head_dropout}"
+            )
             run_combo_all_folds(
                 phase="layer2",
                 exp_name=exp_name,
@@ -534,6 +562,7 @@ def main() -> None:
                 lr=lr,
                 wd=wd,
                 freeze_epochs=frz,
+                head_dropout=head_dropout,
                 base_config=base_config,
                 train_script=train_script,
                 result_root=result_root,
