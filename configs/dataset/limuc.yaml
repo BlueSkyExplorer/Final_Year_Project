@@ -2,23 +2,29 @@ paths:
   data_root: data/LIMUC/patient_based_classified_images
   folds_file: configs/folds/limuc_5fold_patient.json
   output_root: results
-
 images:
   image_size: 224
   num_workers: 4
   pin_memory: true
-
 augmentations:
   color_jitter: false
-  random_resized_crop_scale: [0.8, 1.0]
+  random_resized_crop_scale:
+  - 0.8
+  - 1.0
   center_crop: 224
-
 normalization:
-  mean: [0.485, 0.456, 0.406]
-  std: [0.229, 0.224, 0.225]
-
+  mean:
+  - 0.485
+  - 0.456
+  - 0.406
+  std:
+  - 0.229
+  - 0.224
+  - 0.225
 cv:
   num_folds: 5
-  test_ratio: 0.2  # 加入這行
-
+  test_ratio: 0.2
 seed: 42
+training:
+  early_stopping_patience: 7
+  early_stopping_min_delta: 0.001
