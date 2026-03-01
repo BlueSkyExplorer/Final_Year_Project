@@ -99,6 +99,11 @@ def main():
     backbone_lr = training_cfg.get("backbone_learning_rate", base_lr)
     early_stopping_patience = training_cfg.get("early_stopping_patience", 0)
     early_stopping_min_delta = training_cfg.get("early_stopping_min_delta", 0.0)
+    logger.info(
+        "Early stopping config: patience=%s, min_delta=%s",
+        early_stopping_patience,
+        early_stopping_min_delta,
+    )
 
     if freeze_epochs > 0:
         set_requires_grad(backbone, False)

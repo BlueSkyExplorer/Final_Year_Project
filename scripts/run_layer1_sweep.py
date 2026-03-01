@@ -83,6 +83,8 @@ def build_config(
     cfg["training"]["weight_decay"] = float(wd)
     cfg["training"]["batch_size"] = int(batch_size)
     cfg["training"]["freeze_epochs"] = int(freeze_epochs)
+    cfg["training"].setdefault("early_stopping_patience", 7)
+    cfg["training"].setdefault("early_stopping_min_delta", 0.001)
     out_cfg.write_text(yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True), encoding="utf-8")
 
 

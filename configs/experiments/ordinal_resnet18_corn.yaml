@@ -10,6 +10,8 @@ training:
   backbone_learning_rate: 5e-5
   freeze_epochs: 5
   weight_decay: 1e-4
+  early_stopping_patience: 7
+  early_stopping_min_delta: 0.001
 cv:
   num_folds: 5
   current_fold: 0
