@@ -103,6 +103,9 @@ New-Item -ItemType Directory -Force -Path configs\folds | Out-Null
 - `model.backbone`：如 `resnet18`、`efficientnet_b0`
 - `model.loss`：如 `ce`、`focal`、`coral`、`corn`、`mse`、`huber`
 - `training.*`：batch size、epoch、lr、weight decay、freeze epochs
+- `training.unfreeze_backbone_lr_mode`：解凍 backbone 的 lr 起始策略：
+  - `global_schedule`（預設）：解凍後 backbone 會接軌當前全局 scheduler，因此起始值可能已低於 `backbone_learning_rate`。
+  - `full_value_start`：解凍時 backbone 以 `backbone_learning_rate` 全值加入，接著從下一步與其他 param group 一起衰減。
 - `cv.current_fold`：目前 fold（可被 CLI `--fold` 覆蓋）
 
 ---
@@ -209,7 +212,16 @@ results\<experiment_name>\fold_<k>\cam\
 
 ---
 
-## 8. 常見問題（Windows）
+## 8. Freeze / Unfreeze LR 策略說明
+
+當 `training.freeze_epochs > 0` 且到達解凍 epoch 時，訓練腳本會在日誌輸出：
+
+- `Unfreeze transition lr continuity`
+- `Unfreeze event detail: epoch, head_lr, backbone_lr, scheduler_last_epoch`
+
+可用於對照學習率曲線與實驗結果。若採 `global_schedule`，請注意解凍時 backbone 的起始 lr 會是「接軌後值」而非 `backbone_learning_rate` 原值。
+
+## 9. 常見問題（Windows）
 
 ### Q1. 出現 `Configured folds_file does not exist`
 請先建立：
@@ -231,7 +243,7 @@ New-Item -ItemType Directory -Force -Path configs\folds | Out-Null
 
 ---
 
-## 9. Windows 快速開始（最短流程）
+## 10. Windows 快速開始（最短流程）
 
 ```powershell
 python -m venv .venv
