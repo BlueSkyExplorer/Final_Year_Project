@@ -88,7 +88,8 @@ def main():
 
     backbone = build_backbone(cfg["model"].get("backbone", "resnet18"), pretrained=True)
     feature_dim = get_backbone_output_dim(cfg["model"].get("backbone", "resnet18"))
-    head = RegressionHead(feature_dim)
+    head_dropout = cfg["model"].get("head_dropout", 0.0)
+    head = RegressionHead(feature_dim, dropout=head_dropout)
     model = torch.nn.Sequential(backbone, head)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
