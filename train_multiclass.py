@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 from pathlib import Path
 from typing import Optional
 import torch
@@ -83,6 +84,16 @@ def validate(model, loader, criterion, device):
             probas.extend(probs.cpu().tolist())
     metrics = evaluate_all(targets, preds, y_proba=probas)
     return total_loss / len(loader.dataset), metrics, preds, targets
+
+
+def persist_history_atomic(history, output_dir: str | Path):
+    metrics_path = Path(output_dir) / "metrics.json"
+    tmp_path = metrics_path.with_suffix(metrics_path.suffix + ".tmp")
+    with tmp_path.open("w", encoding="utf-8") as f:
+        json.dump(history, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    tmp_path.replace(metrics_path)
 
 
 def main():
@@ -208,8 +219,10 @@ def main():
             best_qwk = metrics["qwk"]
             epochs_without_improvement = 0
             torch.save(model.state_dict(), Path(output_dir) / "best_model.pt")
+            persist_history_atomic(history, output_dir)
             logger.info("Saved new best model")
         else:
+            persist_history_atomic(history, output_dir)
             epochs_without_improvement += 1
             if early_stopping_patience > 0 and epochs_without_improvement >= early_stopping_patience:
                 logger.info(
@@ -218,10 +231,6 @@ def main():
                     f"(patience={early_stopping_patience}, min_delta={early_stopping_min_delta})."
                 )
                 break
-
-    with open(Path(output_dir) / "metrics.json", "w") as f:
-        json.dump(history, f, indent=2)
-
 
 if __name__ == "__main__":
     main()
