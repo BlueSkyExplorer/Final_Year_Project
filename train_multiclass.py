@@ -176,6 +176,7 @@ def main():
     training_cfg = cfg["training"]
     num_epochs = training_cfg.get("num_epochs", 40)
     base_lr = training_cfg.get("learning_rate", 1e-4)
+    original_head_base_lr = base_lr
     weight_decay = training_cfg.get("weight_decay", 1e-4)
     freeze_epochs = training_cfg.get("freeze_epochs", 0)
     backbone_lr = training_cfg.get("backbone_learning_rate", base_lr)
@@ -211,10 +212,10 @@ def main():
             logger.info("Unfreezing backbone for fine-tuning")
             set_requires_grad(backbone, True)
             head_lr_before_unfreeze = optimizer.param_groups[0]["lr"]
+            optimizer.param_groups[0]["lr"] = original_head_base_lr
             optimizer.add_param_group({"params": backbone.parameters(), "lr": backbone_lr})
-            optimizer.param_groups[0]["lr"] = head_lr_before_unfreeze
             logger.info(
-                "Unfreeze transition lr continuity: head(before)=%.8f, head(after)=%.8f, backbone(start)=%.8f",
+                "Unfreeze transition lr reset: head(before)=%.8f, head(reset_to_base)=%.8f, backbone(start)=%.8f",
                 head_lr_before_unfreeze,
                 optimizer.param_groups[0]["lr"],
                 optimizer.param_groups[1]["lr"],
@@ -230,11 +231,13 @@ def main():
                 else:
                     _register_new_group_with_scheduler(scheduler, optimizer, backbone_lr, training_cfg)
             scheduler_last_epoch = getattr(scheduler, "last_epoch", None) if scheduler is not None else None
+            scheduler_base_lrs = getattr(scheduler, "base_lrs", None) if scheduler is not None else None
+            current_lrs = [group["lr"] for group in optimizer.param_groups]
             logger.info(
-                "Unfreeze event detail: epoch=%d head_lr=%.8f backbone_lr=%.8f scheduler_last_epoch=%s",
+                "Unfreeze event detail: epoch=%d base_lrs=%s current_lrs=%s last_epoch=%s",
                 epoch,
-                optimizer.param_groups[0]["lr"],
-                optimizer.param_groups[1]["lr"],
+                scheduler_base_lrs,
+                current_lrs,
                 scheduler_last_epoch,
             )
 
