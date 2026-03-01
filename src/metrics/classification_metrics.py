@@ -101,20 +101,29 @@ def evaluate_all(y_true, y_pred, y_proba=None):
     bin_01_23_true = (y_true >= 2).astype(int)  # active disease (2/3) vs remission (0/1)
     bin_0_123_true = (y_true > 0).astype(int)   # any disease (1/2/3) vs inactive (0)
 
+    auroc_source = "hard_labels"
     if y_proba is not None:
         y_proba = np.asarray(y_proba, dtype=float)
         if y_proba.ndim == 2 and y_proba.shape[1] == 4:
             p0, p1, p2, p3 = y_proba[:, 0], y_proba[:, 1], y_proba[:, 2], y_proba[:, 3]
             score_01_23 = p2 + p3
             score_0_123 = p1 + p2 + p3
-        else:
+            auroc_source = "class_probs"
+        elif y_proba.ndim == 1:
             score_01_23 = y_proba
             score_0_123 = y_proba
+            auroc_source = "regression_score"
+        else:
+            raise ValueError(
+                "y_proba must be shape (N,) for regression scores or (N, 4) for class probabilities; "
+                f"got shape {y_proba.shape}"
+            )
     else:
         score_01_23 = (y_pred >= 2).astype(float)
         score_0_123 = (y_pred > 0).astype(float)
 
     metrics["bin_01_23"] = binary_metrics(bin_01_23_true, score_01_23)
     metrics["bin_0_123"] = binary_metrics(bin_0_123_true, score_0_123)
+    metrics["auroc_source"] = auroc_source
 
     return metrics

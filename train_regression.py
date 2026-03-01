@@ -51,16 +51,17 @@ def validate(model, loader, loss_fn, device):
     ensure_dataset_not_empty(loader, "Validation")
     model.eval()
     total_loss = 0.0
-    preds, targets = [], []
+    preds, targets, raw_scores = [], [], []
     with torch.no_grad():
         for images, labels, _, _ in loader:
             images, labels = images.to(device), labels.to(device).float()
             outputs = model(images)
             loss = loss_fn(outputs, labels)
             total_loss += loss.item() * images.size(0)
+            raw_scores.extend(outputs.squeeze(-1).cpu().tolist())
             preds.extend(reg_losses.regression_to_class(outputs).cpu().tolist())
             targets.extend(labels.cpu().long().tolist())
-    metrics = evaluate_all(targets, preds)
+    metrics = evaluate_all(targets, preds, y_proba=raw_scores)
     return total_loss / len(loader.dataset), metrics
 
 
@@ -171,7 +172,8 @@ def main():
         current_lrs = get_param_group_lrs(optimizer, freeze_epochs, epoch)
         logger.info(
             f"Epoch {epoch}: train_loss={train_loss:.4f} val_loss={val_loss:.4f} "
-            f"qwk={metrics['qwk']:.4f} param_group_lrs={current_lrs}"
+            f"qwk={metrics['qwk']:.4f} auroc_source={metrics['auroc_source']} "
+            f"param_group_lrs={current_lrs}"
         )
         if metrics["qwk"] > best_qwk + early_stopping_min_delta:
             best_qwk = metrics["qwk"]
