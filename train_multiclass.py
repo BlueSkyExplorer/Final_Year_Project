@@ -67,6 +67,32 @@ def get_param_group_lrs(optimizer, freeze_epochs: int, epoch: int):
     }
 
 
+def _resolve_unfreeze_backbone_lr_mode(training_cfg) -> str:
+    mode = str(training_cfg.get("unfreeze_backbone_lr_mode", "global_schedule")).lower()
+    allowed_modes = {"global_schedule", "full_value_start"}
+    if mode not in allowed_modes:
+        raise ValueError(
+            "training.unfreeze_backbone_lr_mode must be one of "
+            f"{sorted(allowed_modes)}, got {mode!r}"
+        )
+    return mode
+
+
+def _register_new_group_with_scheduler(scheduler, optimizer, backbone_lr: float, training_cfg):
+    if scheduler is None:
+        return
+    if hasattr(scheduler, "base_lrs"):
+        scheduler.base_lrs.append(backbone_lr)
+    scheduler_last_lr = getattr(scheduler, "_last_lr", None)
+    if isinstance(scheduler_last_lr, list):
+        scheduler_last_lr.append(backbone_lr)
+    if hasattr(scheduler, "min_lrs"):
+        min_lr = training_cfg.get("lr_scheduler", {}).get("min_lr", 0.0)
+        scheduler.min_lrs.append(min_lr)
+    if hasattr(scheduler, "optimizer"):
+        scheduler.optimizer = optimizer
+
+
 def validate(model, loader, criterion, device):
     ensure_dataset_not_empty(loader, "Validation")
     model.eval()
@@ -153,12 +179,19 @@ def main():
     weight_decay = training_cfg.get("weight_decay", 1e-4)
     freeze_epochs = training_cfg.get("freeze_epochs", 0)
     backbone_lr = training_cfg.get("backbone_learning_rate", base_lr)
+    unfreeze_backbone_lr_mode = _resolve_unfreeze_backbone_lr_mode(training_cfg)
     early_stopping_patience = training_cfg.get("early_stopping_patience", 0)
     early_stopping_min_delta = training_cfg.get("early_stopping_min_delta", 0.0)
     logger.info(
         "Early stopping config: patience=%s, min_delta=%s",
         early_stopping_patience,
         early_stopping_min_delta,
+    )
+    logger.info(
+        "Freeze strategy: freeze_epochs=%s, backbone_learning_rate=%.8f, unfreeze_backbone_lr_mode=%s",
+        freeze_epochs,
+        backbone_lr,
+        unfreeze_backbone_lr_mode,
     )
 
     if freeze_epochs > 0:
@@ -187,12 +220,23 @@ def main():
                 optimizer.param_groups[1]["lr"],
             )
             if scheduler is not None:
-                scheduler, scheduler_on_val = build_lr_scheduler(
-                    optimizer,
-                    training_cfg,
-                    num_epochs,
-                    last_epoch=epoch - 1,
-                )
+                if unfreeze_backbone_lr_mode == "global_schedule":
+                    scheduler, scheduler_on_val = build_lr_scheduler(
+                        optimizer,
+                        training_cfg,
+                        num_epochs,
+                        last_epoch=epoch - 1,
+                    )
+                else:
+                    _register_new_group_with_scheduler(scheduler, optimizer, backbone_lr, training_cfg)
+            scheduler_last_epoch = getattr(scheduler, "last_epoch", None) if scheduler is not None else None
+            logger.info(
+                "Unfreeze event detail: epoch=%d head_lr=%.8f backbone_lr=%.8f scheduler_last_epoch=%s",
+                epoch,
+                optimizer.param_groups[0]["lr"],
+                optimizer.param_groups[1]["lr"],
+                scheduler_last_epoch,
+            )
 
         train_loss = train_one_epoch(model, train_loader, criterion, optimizer, device)
         val_loss, metrics, preds, targets = validate(model, val_loader, criterion, device)

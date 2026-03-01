@@ -148,6 +148,17 @@ def validate_config(cfg: Dict[str, Any]) -> None:
             training["backbone_learning_rate"], "training.backbone_learning_rate", allow_zero=False
         )
 
+    if "unfreeze_backbone_lr_mode" in training:
+        mode = str(training["unfreeze_backbone_lr_mode"]).lower()
+        allowed_modes = {"global_schedule", "full_value_start"}
+        if mode not in allowed_modes:
+            raise ValueError(
+                "'training.unfreeze_backbone_lr_mode' must be one of "
+                f"{sorted(allowed_modes)}, but got {training['unfreeze_backbone_lr_mode']!r}"
+            )
+        training["unfreeze_backbone_lr_mode"] = mode
+
+
     if "early_stopping_patience" in training:
         training["early_stopping_patience"] = _coerce_non_negative_int(
             training["early_stopping_patience"], "training.early_stopping_patience"
