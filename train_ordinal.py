@@ -48,7 +48,7 @@ def get_param_group_lrs(optimizer, freeze_epochs: int, epoch: int):
     }
 
 
-def validate(model, loader, loss_fn, device):
+def validate(model, loader, loss_fn, device, decode_fn):
     ensure_dataset_not_empty(loader, "Validation")
     model.eval()
     total_loss = 0.0
@@ -59,7 +59,7 @@ def validate(model, loader, loss_fn, device):
             logits = model(images)
             loss = loss_fn(logits, labels)
             total_loss += loss.item() * images.size(0)
-            pred_labels = ordinal_utils.coral_logits_to_label(logits)
+            pred_labels = decode_fn(logits)
             preds.extend(pred_labels.cpu().tolist())
             targets.extend(labels.cpu().tolist())
     metrics = evaluate_all(targets, preds)
@@ -110,8 +110,10 @@ def main():
     loss_name = cfg["model"].get("loss", "coral")
     if loss_name == "coral":
         loss_fn = lambda logits, targets: ordinal_losses.coral_loss(logits, targets, num_classes=4)
+        decode_fn = ordinal_utils.coral_logits_to_label
     elif loss_name == "corn":
         loss_fn = lambda logits, targets: ordinal_losses.corn_loss(logits, targets, num_classes=4)
+        decode_fn = ordinal_utils.corn_logits_to_label
     elif loss_name == "distance":
         alpha = cfg["model"].get("alpha", 1.0)
         logger.info(f"Using distance-aware CDW-CE loss with alpha={alpha}")
@@ -121,8 +123,10 @@ def main():
             num_classes=4,
             alpha=alpha,
         )
+        decode_fn = ordinal_utils.coral_logits_to_label
     else:
         raise ValueError(f"Unknown loss {loss_name}")
+    logger.info("Using loss '%s' with decoder '%s'", loss_name, decode_fn.__name__)
 
     training_cfg = cfg["training"]
     num_epochs = training_cfg.get("num_epochs", 40)
@@ -172,7 +176,7 @@ def main():
                 )
 
         train_loss = train_one_epoch(model, train_loader, loss_fn, optimizer, device)
-        val_loss, metrics = validate(model, val_loader, loss_fn, device)
+        val_loss, metrics = validate(model, val_loader, loss_fn, device, decode_fn)
         history.append({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss, **metrics})
         if scheduler is not None:
             if scheduler_on_val:
