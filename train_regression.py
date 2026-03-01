@@ -207,6 +207,7 @@ def main():
 
         train_loss = train_one_epoch(model, train_loader, loss_fn, optimizer, device)
         val_loss, metrics = validate(model, val_loader, loss_fn, device)
+        assert "auroc_source" in metrics, "validate() must provide auroc_source in metrics"
         history.append({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss, **metrics})
         if scheduler is not None:
             if scheduler_on_val:
