@@ -52,7 +52,7 @@ def validate(model, loader, loss_fn, device, decode_fn):
     ensure_dataset_not_empty(loader, "Validation")
     model.eval()
     total_loss = 0.0
-    preds, targets = [], []
+    preds, targets, probas = [], [], []
     with torch.no_grad():
         for images, labels, _, _ in loader:
             images, labels = images.to(device), labels.to(device)
@@ -60,9 +60,12 @@ def validate(model, loader, loss_fn, device, decode_fn):
             loss = loss_fn(logits, labels)
             total_loss += loss.item() * images.size(0)
             pred_labels = decode_fn(logits)
+            class_probs = ordinal_utils._ordinal_logits_to_class_probs(logits, num_classes=4)
             preds.extend(pred_labels.cpu().tolist())
             targets.extend(labels.cpu().tolist())
-    metrics = evaluate_all(targets, preds)
+            probas.append(class_probs.cpu())
+    y_proba = torch.cat(probas, dim=0).numpy()
+    metrics = evaluate_all(targets, preds, y_proba=y_proba)
     return total_loss / len(loader.dataset), metrics
 
 
@@ -186,7 +189,8 @@ def main():
         current_lrs = get_param_group_lrs(optimizer, freeze_epochs, epoch)
         logger.info(
             f"Epoch {epoch}: train_loss={train_loss:.4f} val_loss={val_loss:.4f} "
-            f"qwk={metrics['qwk']:.4f} param_group_lrs={current_lrs}"
+            f"qwk={metrics['qwk']:.4f} auroc_source={metrics['auroc_source']} "
+            f"param_group_lrs={current_lrs}"
         )
         if metrics["qwk"] > best_qwk + early_stopping_min_delta:
             best_qwk = metrics["qwk"]
