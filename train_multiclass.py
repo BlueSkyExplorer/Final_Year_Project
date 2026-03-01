@@ -1,6 +1,7 @@
 import argparse
 import json
 from pathlib import Path
+from typing import Optional
 import torch
 from torch.utils.data import DataLoader
 from src.utils.config import load_and_merge, validate_config
@@ -21,6 +22,19 @@ def _build_dataset_class_weights(train_dataset, num_classes: int, device: torch.
     class_weights = mc_losses.compute_class_weights(labels, num_classes=num_classes)
     return class_weights.to(device)
 
+
+def _parse_focal_alpha(alpha_cfg, num_classes: int, device: torch.device) -> Optional[torch.Tensor | float]:
+    if alpha_cfg is None:
+        return None
+    if isinstance(alpha_cfg, (float, int)):
+        return float(alpha_cfg)
+    if isinstance(alpha_cfg, list):
+        if len(alpha_cfg) != num_classes:
+            raise ValueError(
+                f"model.alpha list length must equal num_classes ({num_classes}), got {len(alpha_cfg)}"
+            )
+        return torch.tensor(alpha_cfg, dtype=torch.float32, device=device)
+    raise TypeError("model.alpha must be a float/int, list, or null")
 
 def train_one_epoch(model, loader, criterion, optimizer, device):
     ensure_dataset_not_empty(loader, "Training")
@@ -110,7 +124,14 @@ def main():
         logger.info(f"Using dataset-level CBCE class weights: {class_weights.tolist()}")
         criterion = lambda logits, targets: mc_losses.class_balanced_ce(logits, targets, class_weights=class_weights)
     elif loss_name == "focal":
-        criterion = lambda logits, targets: mc_losses.focal_loss(logits, targets, gamma=cfg["model"].get("gamma", 2.0), alpha=cfg["model"].get("alpha", 0.25))
+        focal_alpha = _parse_focal_alpha(cfg["model"].get("alpha", 0.25), num_classes=4, device=device)
+        logger.info(f"Using focal loss alpha: {focal_alpha if isinstance(focal_alpha, float) or focal_alpha is None else focal_alpha.tolist()}")
+        criterion = lambda logits, targets: mc_losses.focal_loss(
+            logits,
+            targets,
+            gamma=cfg["model"].get("gamma", 2.0),
+            alpha=focal_alpha,
+        )
     else:
         raise ValueError(f"Unknown loss {loss_name}")
 
