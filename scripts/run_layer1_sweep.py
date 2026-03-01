@@ -157,8 +157,37 @@ def read_best_metric(result_root: Path, exp_name: str, fold: int) -> float | Non
     metrics_path = result_root / exp_name / f"fold_{fold}" / "metrics.json"
     if not metrics_path.exists():
         return None
-    history = json.loads(metrics_path.read_text(encoding="utf-8"))
-    vals = [float(ep.get("qwk")) for ep in history if ep.get("qwk") is not None]
+
+    try:
+        history = json.loads(metrics_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        print(f"[WARN] read_best_metric failed to parse {metrics_path}: {exc}")
+        return None
+    except OSError as exc:
+        print(f"[WARN] read_best_metric failed to read {metrics_path}: {exc}")
+        return None
+
+    if not isinstance(history, list):
+        print(f"[WARN] read_best_metric got non-list JSON in {metrics_path}; skipping metric extraction")
+        return None
+
+    vals: list[float] = []
+    for idx, ep in enumerate(history):
+        if not isinstance(ep, dict):
+            print(
+                f"[WARN] read_best_metric ignored non-object epoch entry at index {idx} in {metrics_path}"
+            )
+            continue
+        qwk = ep.get("qwk")
+        if qwk is None:
+            continue
+        try:
+            vals.append(float(qwk))
+        except (TypeError, ValueError):
+            print(
+                f"[WARN] read_best_metric ignored invalid qwk value at index {idx} in {metrics_path}: {qwk!r}"
+            )
+
     return max(vals) if vals else None
 
 
