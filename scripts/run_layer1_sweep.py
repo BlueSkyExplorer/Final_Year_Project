@@ -724,7 +724,7 @@ def build_layer2_expansions(sweep_dir: Path) -> list[dict[str, Any]]:
                     }
                 )
 
-    uniq: dict[tuple[float, float, int], dict[str, Any]] = {}
+    uniq: dict[tuple[float, float, int, float], dict[str, Any]] = {}
     for entry in expansions:
         key = (
             float(entry["lr"]),
