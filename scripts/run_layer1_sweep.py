@@ -97,9 +97,10 @@ def validate_resume_base_config(*, base_config: Path, sweep_dir: Path) -> None:
         )
 
 
-def get_train_script(base_config: Path) -> tuple[str, str]:
+def load_base_config_metadata(base_config: Path) -> tuple[str, str, str]:
     cfg = yaml.safe_load(base_config.read_text(encoding="utf-8"))
     paradigm = cfg.get("model", {}).get("paradigm", "")
+    loss_name = cfg.get("model", {}).get("loss", "")
     mapping = {
         "multiclass": "train_multiclass.py",
         "ordinal": "train_ordinal.py",
@@ -107,7 +108,7 @@ def get_train_script(base_config: Path) -> tuple[str, str]:
     }
     if paradigm not in mapping:
         raise ValueError(f"Unsupported paradigm '{paradigm}' in {base_config}.")
-    return paradigm, mapping[paradigm]
+    return paradigm, str(loss_name), mapping[paradigm]
 
 
 def build_config(
@@ -145,11 +146,15 @@ def append_registry_row(registry_path: Path, row: dict[str, Any]) -> None:
         f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
-def read_registry_latest(registry_path: Path) -> dict[tuple[str, float, float, int, float, int], dict[str, Any]]:
-    latest: dict[tuple[str, float, float, int, float, int], dict[str, Any]] = {}
+RegistryKey = tuple[str, float, float, int, float, int, str, str, str]
+
+
+def read_registry_latest(registry_path: Path) -> dict[RegistryKey, dict[str, Any]]:
+    latest: dict[RegistryKey, dict[str, Any]] = {}
     if not registry_path.exists():
         return latest
     ignored_rows = 0
+    legacy_rows = 0
     for raw in registry_path.read_text(encoding="utf-8").splitlines():
         if not raw.strip():
             continue
@@ -160,6 +165,12 @@ def read_registry_latest(registry_path: Path) -> dict[tuple[str, float, float, i
             continue
 
         try:
+            base_config_hash = str(row.get("base_config_hash") or "")
+            paradigm = str(row.get("paradigm") or "")
+            loss_name = str(row.get("loss_name") or "")
+            if not base_config_hash or not paradigm or not loss_name:
+                legacy_rows += 1
+                continue
             key = (
                 row.get("phase"),
                 float(row.get("lr")),
@@ -167,6 +178,9 @@ def read_registry_latest(registry_path: Path) -> dict[tuple[str, float, float, i
                 int(row.get("freeze_epochs")),
                 float(row.get("head_dropout", 0.0)),
                 int(row.get("fold")),
+                base_config_hash,
+                paradigm,
+                loss_name,
             )
         except (TypeError, ValueError):
             ignored_rows += 1
@@ -175,6 +189,12 @@ def read_registry_latest(registry_path: Path) -> dict[tuple[str, float, float, i
 
     if ignored_rows > 0:
         print(f"[WARN] read_registry_latest ignored {ignored_rows} malformed row(s): {registry_path}")
+    if legacy_rows > 0:
+        print(
+            f"[WARN] read_registry_latest detected {legacy_rows} legacy row(s) without "
+            "base_config_hash/paradigm/loss_name. Those rows are not used for skip across configs. "
+            "You may rebuild sweep_registry.jsonl if needed."
+        )
     return latest
 
 
@@ -187,9 +207,24 @@ def should_skip_completed_fold(
     freeze_epochs: int,
     head_dropout: float,
     fold: int,
+    base_config_hash: str,
+    paradigm: str,
+    loss_name: str,
 ) -> bool:
     latest = read_registry_latest(registry_path)
-    row = latest.get((phase, float(lr), float(wd), int(freeze_epochs), float(head_dropout), int(fold)))
+    row = latest.get(
+        (
+            phase,
+            float(lr),
+            float(wd),
+            int(freeze_epochs),
+            float(head_dropout),
+            int(fold),
+            str(base_config_hash),
+            str(paradigm),
+            str(loss_name),
+        )
+    )
     return bool(row and row.get("status") == "completed")
 
 
@@ -263,6 +298,9 @@ def run_single_fold_with_guard(
     result_root: Path,
     sweep_dir: Path,
     registry_path: Path,
+    base_config_hash: str,
+    paradigm: str,
+    loss_name: str,
 ) -> None:
     current_bs = BATCH_SIZE
     run_status = "failed"
@@ -317,6 +355,9 @@ def run_single_fold_with_guard(
             "freeze_epochs": int(freeze_epochs),
             "head_dropout": float(head_dropout),
             "fold": int(fold),
+            "base_config_hash": str(base_config_hash),
+            "paradigm": str(paradigm),
+            "loss_name": str(loss_name),
             "metric": best_metric,
             "status": run_status,
             "error": run_error if run_error else None,
@@ -336,6 +377,9 @@ def run_combo_all_folds(**kwargs: Any) -> None:
             freeze_epochs=kwargs["freeze_epochs"],
             head_dropout=kwargs["head_dropout"],
             fold=fold,
+            base_config_hash=kwargs["base_config_hash"],
+            paradigm=kwargs["paradigm"],
+            loss_name=kwargs["loss_name"],
         ):
             print(f"  -> fold {fold} already completed in registry, skip (resume).")
             continue
@@ -359,7 +403,14 @@ def write_tsv_rows(path: Path, rows: list[list[str]]) -> None:
         writer.writerows(rows)
 
 
-def summarize_layer1(sweep_dir: Path, registry_path: Path) -> None:
+def summarize_layer1(
+    sweep_dir: Path,
+    registry_path: Path,
+    *,
+    base_config_hash: str,
+    paradigm: str,
+    loss_name: str,
+) -> None:
     if PROMOTION_RATIO is not None and not (0 < PROMOTION_RATIO <= 1):
         raise ValueError("PROMOTION_RATIO must be in (0,1].")
 
@@ -376,7 +427,19 @@ def summarize_layer1(sweep_dir: Path, registry_path: Path) -> None:
         failed_reasons: list[str] = []
         fold_states: list[str] = []
         for fold in EVAL_FOLDS:
-            rec = latest.get(("layer1", lr_f, wd_f, frz_i, head_dropout_f, fold))
+            rec = latest.get(
+                (
+                    "layer1",
+                    lr_f,
+                    wd_f,
+                    frz_i,
+                    head_dropout_f,
+                    fold,
+                    str(base_config_hash),
+                    str(paradigm),
+                    str(loss_name),
+                )
+            )
             if not rec:
                 failed_reasons.append(f"fold_{fold}:not_run")
                 fold_states.append("not_run")
@@ -535,7 +598,8 @@ def main() -> None:
     args = parse_args()
     member_grid = MEMBER_GRIDS[args.member_id]
     base_config = Path(args.base_config)
-    paradigm, train_script = get_train_script(base_config)
+    base_config_hash = compute_file_sha256(base_config)
+    paradigm, loss_name, train_script = load_base_config_metadata(base_config)
 
     result_root = Path("results")
     if args.resume_sweep_dir:
@@ -561,7 +625,7 @@ def main() -> None:
 
     print(
         f"[Config] MEMBER_ID={args.member_id}, BASE_CONFIG={base_config}, "
-        f"PARADIGM={paradigm}, TRAIN_SCRIPT={train_script}"
+        f"PARADIGM={paradigm}, LOSS={loss_name}, BASE_CONFIG_HASH={base_config_hash}, TRAIN_SCRIPT={train_script}"
     )
     print(
         f"[Config] Layer1 LRs={member_grid.lrs} WDs={member_grid.wds} "
@@ -601,6 +665,9 @@ def main() -> None:
                             result_root=result_root,
                             sweep_dir=sweep_dir,
                             registry_path=registry_path,
+                            base_config_hash=base_config_hash,
+                            paradigm=paradigm,
+                            loss_name=loss_name,
                         )
 
                         if exp_name not in existing_combo_names:
@@ -608,7 +675,13 @@ def main() -> None:
                             existing_combo_names.add(exp_name)
         write_tsv_rows(combos_path, combo_rows)
 
-        summarize_layer1(sweep_dir, registry_path)
+        summarize_layer1(
+            sweep_dir,
+            registry_path,
+            base_config_hash=base_config_hash,
+            paradigm=paradigm,
+            loss_name=loss_name,
+        )
         layer2 = build_layer2_expansions(sweep_dir)
 
         if not layer2:
@@ -640,6 +713,9 @@ def main() -> None:
                 result_root=result_root,
                 sweep_dir=sweep_dir,
                 registry_path=registry_path,
+                base_config_hash=base_config_hash,
+                paradigm=paradigm,
+                loss_name=loss_name,
             )
 
     print(f"Sweep complete. Artifacts under: {sweep_dir}")
