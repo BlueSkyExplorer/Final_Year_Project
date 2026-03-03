@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import math
 import statistics
@@ -52,9 +53,48 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--base-config",
         default="configs/experiments/multiclass_resnet18_ce.yaml",
+        help="Base config used to generate per-run configs. In --resume-sweep-dir mode, this file must match the original sweep base config (SHA256 check).",
     )
-    parser.add_argument("--resume-sweep-dir", default="")
+    parser.add_argument(
+        "--resume-sweep-dir",
+        default="",
+        help="Resume from an existing sweep directory. Requires --base-config to be identical to the one used when the sweep was created.",
+    )
     return parser.parse_args()
+
+
+def compute_file_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def persist_sweep_base_config(*, base_config: Path, sweep_dir: Path) -> None:
+    copied_base_config = sweep_dir / "sweep_base_config.yaml"
+    copied_base_config.write_bytes(base_config.read_bytes())
+
+    digest = compute_file_sha256(base_config)
+    (sweep_dir / "sweep_base_config.sha256").write_text(f"{digest}\n", encoding="utf-8")
+
+
+def validate_resume_base_config(*, base_config: Path, sweep_dir: Path) -> None:
+    saved_hash_path = sweep_dir / "sweep_base_config.sha256"
+    saved_base_config_path = sweep_dir / "sweep_base_config.yaml"
+
+    current_hash = compute_file_sha256(base_config)
+    if not saved_hash_path.exists():
+        raise RuntimeError(
+            "Resume consistency check failed: missing saved base-config SHA256 file "
+            f"at {saved_hash_path}. Cannot safely resume. "
+            "If you need to change base config, start a new sweep instead of resuming."
+        )
+
+    saved_hash = saved_hash_path.read_text(encoding="utf-8").strip()
+    if current_hash != saved_hash:
+        raise RuntimeError(
+            "Resume consistency check failed: --base-config content does not match the original sweep base config. "
+            f"saved_base_config_path={saved_base_config_path}, saved_sha256={saved_hash}; "
+            f"current_base_config_path={base_config}, current_sha256={current_hash}. "
+            "If you want to change base config, you must start a new sweep and must not resume an old sweep."
+        )
 
 
 def get_train_script(base_config: Path) -> tuple[str, str]:
@@ -501,11 +541,14 @@ def main() -> None:
     if args.resume_sweep_dir:
         sweep_dir = Path(args.resume_sweep_dir)
         print(f"[Resume] using existing sweep dir: {sweep_dir}")
+        validate_resume_base_config(base_config=base_config, sweep_dir=sweep_dir)
     else:
         run_tag = datetime.now().strftime("%Y%m%d_%H%M%S")
         sweep_dir = result_root / "sweeps" / f"layer1_layer2_{run_tag}"
 
     sweep_dir.mkdir(parents=True, exist_ok=True)
+    if not args.resume_sweep_dir:
+        persist_sweep_base_config(base_config=base_config, sweep_dir=sweep_dir)
     run_tag_file = sweep_dir / "run_tag.txt"
     if run_tag_file.exists():
         run_tag = run_tag_file.read_text(encoding="utf-8").strip()
