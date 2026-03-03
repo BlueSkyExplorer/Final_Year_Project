@@ -111,6 +111,28 @@ def load_base_config_metadata(base_config: Path) -> tuple[str, str, str]:
     return paradigm, str(loss_name), mapping[paradigm]
 
 
+def _require_cfg_value(cfg: dict[str, Any], dotted_path: str) -> Any:
+    cursor: Any = cfg
+    for segment in dotted_path.split("."):
+        if not isinstance(cursor, dict) or segment not in cursor:
+            raise ValueError(f"Missing required config field '{dotted_path}'.")
+        cursor = cursor[segment]
+    if cursor is None:
+        raise ValueError(f"Required config field '{dotted_path}' is null.")
+    return cursor
+
+
+def _infer_head_type(paradigm: str) -> str:
+    head_type_map = {
+        "multiclass": "MultiClassHead",
+        "ordinal": "OrdinalHead",
+        "regression": "RegressionHead",
+    }
+    if paradigm not in head_type_map:
+        raise ValueError(f"Cannot infer model head type for paradigm='{paradigm}'.")
+    return head_type_map[paradigm]
+
+
 def build_config(
     *,
     base_config: Path,
@@ -121,8 +143,12 @@ def build_config(
     head_dropout: float,
     out_cfg: Path,
     batch_size: int,
-) -> None:
+    base_config_hash: str,
+) -> dict[str, Any]:
     cfg = yaml.safe_load(base_config.read_text(encoding="utf-8"))
+    if not isinstance(cfg, dict):
+        raise ValueError(f"Base config must be a YAML object: {base_config}")
+
     cfg["experiment_name"] = exp_name
     cfg.setdefault("model", {})
     cfg["model"]["head_dropout"] = float(head_dropout)
@@ -134,7 +160,39 @@ def build_config(
     cfg["training"]["freeze_epochs"] = int(freeze_epochs)
     cfg["training"].setdefault("early_stopping_patience", 7)
     cfg["training"].setdefault("early_stopping_min_delta", 0.001)
+
+    paradigm = str(_require_cfg_value(cfg, "model.paradigm"))
+    loss_name = str(_require_cfg_value(cfg, "model.loss"))
+    backbone = str(_require_cfg_value(cfg, "model.backbone"))
+    head_type = str(cfg.get("model", {}).get("head_type") or _infer_head_type(paradigm))
+
     out_cfg.write_text(yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True), encoding="utf-8")
+    return {
+        "experiment_name": exp_name,
+        "generated_config": str(out_cfg),
+        "base_config_path": str(base_config),
+        "base_config_hash": str(base_config_hash),
+        "semantic": {
+            "paradigm": paradigm,
+            "loss": loss_name,
+            "backbone": backbone,
+            "head_type": head_type,
+        },
+        "overrides": {
+            "training.learning_rate": float(lr),
+            "training.lr": float(lr),
+            "training.weight_decay": float(wd),
+            "training.batch_size": int(batch_size),
+            "training.freeze_epochs": int(freeze_epochs),
+            "model.head_dropout": float(head_dropout),
+        },
+    }
+
+
+def write_run_metadata(*, result_root: Path, exp_name: str, fold: int, run_meta: dict[str, Any]) -> None:
+    fold_dir = result_root / exp_name / f"fold_{fold}"
+    fold_dir.mkdir(parents=True, exist_ok=True)
+    (fold_dir / "run_meta.json").write_text(json.dumps(run_meta, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 def append_registry_row(registry_path: Path, row: dict[str, Any]) -> None:
@@ -308,7 +366,7 @@ def run_single_fold_with_guard(
     best_metric: float | None = None
 
     while True:
-        build_config(
+        run_meta = build_config(
             base_config=base_config,
             exp_name=exp_name,
             lr=lr,
@@ -317,6 +375,14 @@ def run_single_fold_with_guard(
             head_dropout=head_dropout,
             out_cfg=cfg_path,
             batch_size=current_bs,
+            base_config_hash=base_config_hash,
+        )
+        write_run_metadata(result_root=result_root, exp_name=exp_name, fold=fold, run_meta=run_meta)
+        semantic = run_meta["semantic"]
+        print(
+            "  -> run summary: "
+            f"combo={exp_name}, fold={fold}, paradigm={semantic['paradigm']}, "
+            f"loss={semantic['loss']}, base_config={base_config}, base_config_hash={base_config_hash}"
         )
         run_log = sweep_dir / f"{exp_name}_fold{fold}_bs{current_bs}.log"
         print(f"  -> fold {fold} (batch_size={current_bs})")
