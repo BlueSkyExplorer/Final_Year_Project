@@ -8,6 +8,7 @@ import csv
 import hashlib
 import json
 import math
+import re
 import statistics
 import subprocess
 import sys
@@ -59,6 +60,17 @@ def parse_args() -> argparse.Namespace:
         "--resume-sweep-dir",
         default="",
         help="Resume from an existing sweep directory. Requires --base-config to be identical to the one used when the sweep was created.",
+    )
+    parser.add_argument(
+        "--summarize-only",
+        action="store_true",
+        help="Only regenerate Layer1 ranking artifacts from existing sweep_registry/layer1_combos data, without launching training.",
+    )
+    parser.add_argument(
+        "--group-profile",
+        default="auto",
+        choices=["auto", "legacy_combo_split_v1"],
+        help="Grouping rule for Layer1 summarization. 'legacy_combo_split_v1' applies the requested historical combo/fold split.",
     )
     return parser.parse_args()
 
@@ -473,14 +485,48 @@ def summarize_layer1(
     sweep_dir: Path,
     registry_path: Path,
     *,
-    base_config_hash: str,
-    paradigm: str,
-    loss_name: str,
+    group_profile: str = "auto",
 ) -> None:
     if PROMOTION_RATIO is not None and not (0 < PROMOTION_RATIO <= 1):
         raise ValueError("PROMOTION_RATIO must be in (0,1].")
 
-    latest = read_registry_latest(registry_path)
+    def parse_combo_idx(exp_name: str) -> int | None:
+        m = re.search(r"_combo_(\d+)$", exp_name)
+        return int(m.group(1)) if m else None
+
+    def apply_group_profile(
+        exp_name: str,
+        fold: int,
+        base_config_hash: str,
+        paradigm: str,
+        loss_name: str,
+    ) -> tuple[str, str, str]:
+        if group_profile != "legacy_combo_split_v1":
+            return base_config_hash, paradigm, loss_name
+
+        combo_idx = parse_combo_idx(exp_name)
+        if combo_idx is None:
+            return base_config_hash, paradigm, loss_name
+
+        if (1 <= combo_idx <= 12) or (combo_idx == 13 and fold == 0):
+            return base_config_hash, "ordinal", "coral"
+        if (combo_idx == 13 and fold == 1) or (14 <= combo_idx <= 16 and fold == 1):
+            return base_config_hash, "multiclass", "ce"
+        return base_config_hash, paradigm, loss_name
+
+    latest_rows: dict[tuple[str, int], dict[str, Any]] = {}
+    for raw in registry_path.read_text(encoding="utf-8").splitlines() if registry_path.exists() else []:
+        if not raw.strip():
+            continue
+        try:
+            row = json.loads(raw)
+            key = (str(row.get("experiment_name") or ""), int(row.get("fold")))
+            if not key[0] or row.get("phase") != "layer1":
+                continue
+            latest_rows[key] = row
+        except (ValueError, TypeError, json.JSONDecodeError):
+            continue
+
     rows: list[dict[str, Any]] = []
     for combo in load_tsv_rows(sweep_dir / "layer1_combos.tsv"):
         exp_name, lr, wd, frz, head_dropout = combo
@@ -492,24 +538,23 @@ def summarize_layer1(
         fold_qwks: dict[int, float] = {}
         failed_reasons: list[str] = []
         fold_states: list[str] = []
+        fold_groups: dict[int, tuple[str, str, str]] = {}
         for fold in EVAL_FOLDS:
-            rec = latest.get(
-                (
-                    "layer1",
-                    lr_f,
-                    wd_f,
-                    frz_i,
-                    head_dropout_f,
-                    fold,
-                    str(base_config_hash),
-                    str(paradigm),
-                    str(loss_name),
-                )
-            )
+            rec = latest_rows.get((exp_name, fold))
             if not rec:
                 failed_reasons.append(f"fold_{fold}:not_run")
                 fold_states.append("not_run")
                 continue
+
+            grp = apply_group_profile(
+                exp_name,
+                fold,
+                str(rec.get("base_config_hash") or ""),
+                str(rec.get("paradigm") or ""),
+                str(rec.get("loss_name") or ""),
+            )
+            fold_groups[fold] = grp
+
             status = rec.get("status")
             fold_states.append(status)
             if status == "completed" and rec.get("metric") is not None:
@@ -530,6 +575,19 @@ def summarize_layer1(
         else:
             combo_status = "partial"
 
+        unique_groups = sorted(set(fold_groups.values()))
+        polluted = len(unique_groups) > 1
+        if polluted:
+            group_id = "污染組合"
+            group_note = "污染組合：同一 combo 的 folds 來自不同組，禁止用於最終選型"
+        elif unique_groups:
+            bch, pdm, lsn = unique_groups[0]
+            group_id = f"{pdm}|{lsn}|{bch[:12]}"
+            group_note = "僅可在同組內比較，不可跨組比較"
+        else:
+            group_id = "unknown"
+            group_note = "僅可在同組內比較，不可跨組比較"
+
         rows.append(
             {
                 "experiment_name": exp_name,
@@ -542,29 +600,52 @@ def summarize_layer1(
                 "mean_qwk": mean_qwk,
                 "std_qwk": std_qwk,
                 "combo_status": combo_status,
+                "group_id": group_id,
+                "group_membership": [
+                    {
+                        "fold": fold,
+                        "base_config_hash": g[0],
+                        "paradigm": g[1],
+                        "loss_name": g[2],
+                    }
+                    for fold, g in sorted(fold_groups.items())
+                ],
+                "is_polluted_combo": polluted,
+                "group_note": group_note,
                 "failed_reason": " | ".join(failed_reasons) if failed_reasons else "",
             }
         )
 
-    rows.sort(key=lambda r: (-r["mean_qwk"], r["std_qwk"], r["experiment_name"]))
-    total = len(rows)
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        if row["is_polluted_combo"]:
+            row["rank"] = ""
+            row["promoted"] = False
+            row["promotion_reason"] = "not_promoted; polluted_combo"
+            continue
+        grouped.setdefault(str(row["group_id"]), []).append(row)
 
-    if PROMOTION_RATIO is not None:
-        promoted_n = max(1, math.ceil(total * PROMOTION_RATIO))
-        policy_text = f"ratio={PROMOTION_RATIO:.2f}"
-    else:
-        promoted_n = min(PROMOTION_TOP_K, total)
-        policy_text = f"top_k={PROMOTION_TOP_K}"
+    for gid, group_rows in grouped.items():
+        group_rows.sort(key=lambda r: (-r["mean_qwk"], r["std_qwk"], r["experiment_name"]))
+        total = len(group_rows)
+        if PROMOTION_RATIO is not None:
+            promoted_n = max(1, math.ceil(total * PROMOTION_RATIO))
+            policy_text = f"ratio={PROMOTION_RATIO:.2f}"
+        else:
+            promoted_n = min(PROMOTION_TOP_K, total)
+            policy_text = f"top_k={PROMOTION_TOP_K}"
 
-    for i, row in enumerate(rows, start=1):
-        promoted = i <= promoted_n and row["combo_status"] == "completed"
-        row["rank"] = i
-        row["promoted"] = promoted
-        row["promotion_reason"] = (
-            f"promoted_by_{policy_text}; rank={i}/{total}; sort=(-mean_qwk,+std_qwk)"
-            if promoted
-            else f"not_promoted_by_{policy_text}; rank={i}/{total}; sort=(-mean_qwk,+std_qwk); status={row['combo_status']}"
-        )
+        for i, row in enumerate(group_rows, start=1):
+            promoted = i <= promoted_n and row["combo_status"] == "completed"
+            row["rank"] = i
+            row["promoted"] = promoted
+            row["promotion_reason"] = (
+                f"promoted_by_{policy_text}; group={gid}; rank={i}/{total}; sort=(-mean_qwk,+std_qwk)"
+                if promoted
+                else f"not_promoted_by_{policy_text}; group={gid}; rank={i}/{total}; sort=(-mean_qwk,+std_qwk); status={row['combo_status']}"
+            )
+
+    rows.sort(key=lambda r: (r["is_polluted_combo"], str(r["group_id"]), -(r["mean_qwk"]), r["std_qwk"], r["experiment_name"]))
 
     csv_path = sweep_dir / "layer1_ranking.csv"
     with csv_path.open("w", newline="", encoding="utf-8") as f:
@@ -580,6 +661,9 @@ def summarize_layer1(
             "mean_qwk",
             "std_qwk",
             "combo_status",
+            "group_id",
+            "is_polluted_combo",
+            "group_note",
             "promoted",
             "promotion_reason",
             "failed_reason",
@@ -602,7 +686,7 @@ def summarize_layer1(
 
     print(f"Saved ranking CSV: {csv_path}")
     print(f"Saved ranking JSONL: {jsonl_path}")
-    print(f"Promoted: {len(promoted_rows)}/{total}")
+    print(f"Promoted: {len(promoted_rows)}/{len(rows)}")
 
 
 def nearest_idx(values: list[float], target: float) -> int:
@@ -741,13 +825,10 @@ def main() -> None:
                             existing_combo_names.add(exp_name)
         write_tsv_rows(combos_path, combo_rows)
 
-        summarize_layer1(
-            sweep_dir,
-            registry_path,
-            base_config_hash=base_config_hash,
-            paradigm=paradigm,
-            loss_name=loss_name,
-        )
+        summarize_layer1(sweep_dir, registry_path, group_profile=args.group_profile)
+        if args.summarize_only:
+            print("Summarize-only mode: skip Layer2 expansion and training.")
+            return
         layer2 = build_layer2_expansions(sweep_dir)
 
         if not layer2:
