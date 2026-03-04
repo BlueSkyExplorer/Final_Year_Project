@@ -3,26 +3,36 @@ import csv
 import json
 from pathlib import Path
 import numpy as np
-from scipy import stats
 
 
-def load_fold_metrics(exp_dir: Path):
+def flatten_metrics(payload: dict, prefix: str = "") -> dict[str, float]:
+    flattened = {}
+    for key, value in payload.items():
+        name = f"{prefix}.{key}" if prefix else key
+        if isinstance(value, dict):
+            flattened.update(flatten_metrics(value, name))
+        elif isinstance(value, (int, float)):
+            flattened[name] = float(value)
+    return flattened
+
+
+def load_fold_metrics(exp_dir: Path, source: str):
     metrics = []
-    for fold_dir in sorted(exp_dir.glob("fold_*/metrics.json")):
+    metric_filename = "test_metrics.json" if source == "test" else "best_val_metrics.json"
+    for fold_dir in sorted(exp_dir.glob(f"fold_*/{metric_filename}")):
         with open(fold_dir, "r") as f:
-            hist = json.load(f)
-            if not hist:
+            payload = json.load(f)
+            if not payload:
                 continue
-            best_epoch_metrics = max(hist, key=lambda m: m.get("qwk", float("-inf")))
-            metrics.append(best_epoch_metrics)
+            metrics.append(flatten_metrics(payload))
     return metrics
 
 
 def summarize(metrics):
     summary = {}
-    keys = [k for k in metrics[0] if isinstance(metrics[0][k], (int, float))]
+    keys = sorted({key for metric in metrics for key in metric.keys()})
     for key in keys:
-        values = np.array([m[key] for m in metrics])
+        values = np.array([m[key] for m in metrics if key in m])
         summary[key] = {
             "mean": float(values.mean()),
             "std": float(values.std()),
@@ -56,6 +66,7 @@ def write_summary_csv(summary: dict, output_path: Path):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--experiment", required=True, help="experiment name (matches config stem)")
+    parser.add_argument("--source", choices=["test", "val"], default="test")
     parser.add_argument(
         "--output-json",
         type=Path,
@@ -74,9 +85,9 @@ def main():
     output_json = args.output_json or (exp_dir / "cross_fold_summary.json")
     output_csv = args.output_csv or (exp_dir / "cross_fold_summary.csv")
 
-    metrics = load_fold_metrics(exp_dir)
+    metrics = load_fold_metrics(exp_dir, args.source)
     if not metrics:
-        raise ValueError(f"No fold metrics found under: {exp_dir}")
+        raise ValueError(f"No fold metrics found under: {exp_dir} for source={args.source}")
 
     summary = summarize(metrics)
     print(json.dumps(summary, indent=2))

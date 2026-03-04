@@ -1,6 +1,4 @@
 import argparse
-import json
-import os
 from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
@@ -10,6 +8,7 @@ from src.utils.logging import setup_logging, get_logger
 from src.utils.paths import resolve_output_dir
 from src.utils.data_checks import ensure_dataset_not_empty
 from src.utils.lr_scheduler import build_lr_scheduler
+from src.utils.evaluation_io import build_split_manifest, persist_json_atomic, write_predictions_csv
 from src.data.limuc_dataset import LIMUCDataset
 from src.models.backbones import build_backbone, get_backbone_output_dim
 from src.models.heads import RegressionHead
@@ -73,32 +72,43 @@ def _register_new_group_with_scheduler(scheduler, optimizer, backbone_lr: float,
         scheduler.optimizer = optimizer
 
 
-def validate(model, loader, loss_fn, device):
-    ensure_dataset_not_empty(loader, "Validation")
+def evaluate_split(model, loader, loss_fn, device, split_name: str):
+    ensure_dataset_not_empty(loader, split_name.capitalize())
     model.eval()
     total_loss = 0.0
     preds, targets, raw_scores = [], [], []
+    prediction_rows = []
     with torch.no_grad():
-        for images, labels, _, _ in loader:
+        for images, labels, patient_ids, image_paths in loader:
             images, labels = images.to(device), labels.to(device).float()
             outputs = model(images)
             loss = loss_fn(outputs, labels)
             total_loss += loss.item() * images.size(0)
-            raw_scores.extend(outputs.squeeze(-1).cpu().tolist())
-            preds.extend(reg_losses.regression_to_class(outputs).cpu().tolist())
-            targets.extend(labels.cpu().long().tolist())
+            batch_raw_scores = outputs.squeeze(-1).cpu().tolist()
+            batch_preds = reg_losses.regression_to_class(outputs).cpu().tolist()
+            batch_targets = labels.cpu().long().tolist()
+            raw_scores.extend(batch_raw_scores)
+            preds.extend(batch_preds)
+            targets.extend(batch_targets)
+            for patient_id, image_path, true_label, pred_label, raw_score in zip(
+                patient_ids,
+                image_paths,
+                batch_targets,
+                batch_preds,
+                batch_raw_scores,
+            ):
+                prediction_rows.append(
+                    {
+                        "image_path": str(image_path),
+                        "patient_id": str(patient_id),
+                        "true_label": int(true_label),
+                        "pred_label": int(pred_label),
+                        "split": split_name,
+                        "raw_score": float(raw_score),
+                    }
+                )
     metrics = evaluate_all(targets, preds, y_proba=raw_scores)
-    return total_loss / len(loader.dataset), metrics
-
-
-def persist_history_atomic(history, output_dir: str | Path):
-    metrics_path = Path(output_dir) / "metrics.json"
-    tmp_path = metrics_path.with_suffix(metrics_path.suffix + ".tmp")
-    with tmp_path.open("w", encoding="utf-8") as f:
-        json.dump(history, f, indent=2)
-        f.flush()
-        os.fsync(f.fileno())
-    tmp_path.replace(metrics_path)
+    return total_loss / len(loader.dataset), metrics, prediction_rows
 
 
 def main():
@@ -119,10 +129,13 @@ def main():
 
     train_ds = LIMUCDataset(cfg, split="train")
     val_ds = LIMUCDataset(cfg, split="val")
+    test_ds = LIMUCDataset(cfg, split="test")
     train_loader = DataLoader(train_ds, batch_size=cfg["training"].get("batch_size", 16), shuffle=True,
                               num_workers=cfg["images"].get("num_workers", 4), pin_memory=cfg["images"].get("pin_memory", True))
     val_loader = DataLoader(val_ds, batch_size=cfg["training"].get("batch_size", 16), shuffle=False,
                             num_workers=cfg["images"].get("num_workers", 4), pin_memory=cfg["images"].get("pin_memory", True))
+    test_loader = DataLoader(test_ds, batch_size=cfg["training"].get("batch_size", 16), shuffle=False,
+                             num_workers=cfg["images"].get("num_workers", 4), pin_memory=cfg["images"].get("pin_memory", True))
 
     backbone = build_backbone(cfg["model"].get("backbone", "resnet18"), pretrained=True)
     feature_dim = get_backbone_output_dim(cfg["model"].get("backbone", "resnet18"))
@@ -171,7 +184,8 @@ def main():
 
     scheduler, scheduler_on_val = build_lr_scheduler(optimizer, training_cfg, num_epochs)
 
-    best_qwk = -1
+    best_qwk = float("-inf")
+    best_epoch = None
     epochs_without_improvement = 0
     history = []
     for epoch in range(num_epochs):
@@ -209,8 +223,8 @@ def main():
             )
 
         train_loss = train_one_epoch(model, train_loader, loss_fn, optimizer, device)
-        val_loss, metrics = validate(model, val_loader, loss_fn, device)
-        assert "auroc_source" in metrics, "validate() must provide auroc_source in metrics"
+        val_loss, metrics, _ = evaluate_split(model, val_loader, loss_fn, device, "val")
+        assert "auroc_source" in metrics, "evaluate_split() must provide auroc_source in metrics"
         history.append({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss, **metrics})
         if scheduler is not None:
             if scheduler_on_val:
@@ -225,12 +239,13 @@ def main():
         )
         if metrics["qwk"] > best_qwk + early_stopping_min_delta:
             best_qwk = metrics["qwk"]
+            best_epoch = epoch
             epochs_without_improvement = 0
             torch.save(model.state_dict(), Path(output_dir) / "best_model.pt")
-            persist_history_atomic(history, output_dir)
+            persist_json_atomic(history, Path(output_dir) / "metrics.json")
             logger.info("Saved new best model")
         else:
-            persist_history_atomic(history, output_dir)
+            persist_json_atomic(history, Path(output_dir) / "metrics.json")
             epochs_without_improvement += 1
             if early_stopping_patience > 0 and epochs_without_improvement >= early_stopping_patience:
                 logger.info(
@@ -239,6 +254,44 @@ def main():
                     f"(patience={early_stopping_patience}, min_delta={early_stopping_min_delta})."
                 )
                 break
+
+    if best_epoch is None:
+        raise RuntimeError("Training completed without saving a best_model.pt checkpoint.")
+
+    best_model_path = Path(output_dir) / "best_model.pt"
+    model.load_state_dict(torch.load(best_model_path, map_location=device))
+
+    best_val_loss, best_val_metrics, val_predictions = evaluate_split(model, val_loader, loss_fn, device, "val")
+    test_loss, test_metrics, test_predictions = evaluate_split(model, test_loader, loss_fn, device, "test")
+    persist_json_atomic(
+        {
+            "epoch": best_epoch,
+            "loss": best_val_loss,
+            **best_val_metrics,
+        },
+        Path(output_dir) / "best_val_metrics.json",
+    )
+    persist_json_atomic(
+        {
+            "epoch": best_epoch,
+            "loss": test_loss,
+            **test_metrics,
+        },
+        Path(output_dir) / "test_metrics.json",
+    )
+    write_predictions_csv(val_predictions, Path(output_dir) / "val_predictions.csv")
+    write_predictions_csv(test_predictions, Path(output_dir) / "test_predictions.csv")
+    persist_json_atomic(
+        build_split_manifest(cfg=cfg, train_ds=train_ds, val_ds=val_ds, test_ds=test_ds),
+        Path(output_dir) / "split_manifest.json",
+    )
+    logger.info(
+        "Best checkpoint summary: best_epoch=%s best_val_qwk=%.4f test_qwk=%.4f test_auroc_source=%s",
+        best_epoch,
+        best_val_metrics["qwk"],
+        test_metrics["qwk"],
+        test_metrics["auroc_source"],
+    )
 
 
 if __name__ == "__main__":

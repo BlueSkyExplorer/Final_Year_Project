@@ -1,6 +1,6 @@
-experiment_name: multiclass_efficientnet_b0_distance
+experiment_name: ordinal_efficientnet_b0_distance
 model:
-  paradigm: multiclass
+  paradigm: ordinal
   backbone: efficientnet_b0
   loss: distance
   alpha: 6

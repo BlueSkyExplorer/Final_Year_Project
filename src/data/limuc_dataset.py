@@ -17,8 +17,9 @@ class LIMUCDataset(Dataset):
         if fold_mapping is not None and test_patients is not None:
             self.fold_mapping = fold_mapping
             self.test_patients = test_patients
+            self.fold_metadata = {}
         else:
-            self.fold_mapping, self.test_patients = load_fold_mapping(
+            self.fold_mapping, self.test_patients, self.fold_metadata = load_fold_mapping(
                 cfg["paths"]["data_root"],
                 cfg["paths"]["folds_file"],
                 num_folds=cfg.get("cv", {}).get("num_folds", 5),
