@@ -22,14 +22,19 @@ def coral_loss(logits: torch.Tensor, targets: torch.Tensor, num_classes: int = 4
 def corn_loss(logits: torch.Tensor, targets: torch.Tensor, num_classes: int = 4) -> torch.Tensor:
     targets = targets.view(-1)
     loss = 0.0
+    count = 0
     for k in range(num_classes - 1):
+        # CORN conditional: 只考慮 Y ≥ k 的樣本
         mask = targets >= k
-        if mask.any():
-            loss += F.binary_cross_entropy_with_logits(logits[mask, k], torch.ones_like(logits[mask, k]))
-        mask = targets < k
-        if mask.any():
-            loss += F.binary_cross_entropy_with_logits(logits[mask, k], torch.zeros_like(logits[mask, k]))
-    return loss / (num_classes - 1)
+        if mask.sum() <= 0:
+            continue
+        # 在 Y ≥ k 的樣本中: Y > k → 正 (1), Y = k → 負 (0)
+        conditional_labels = (targets[mask] > k).float()
+        loss += F.binary_cross_entropy_with_logits(
+            logits[mask, k], conditional_labels
+        )
+        count += 1
+    return loss / max(count, 1)
 
 
 def _ordinal_logits_to_class_probs(logits: torch.Tensor, num_classes: int) -> torch.Tensor:
