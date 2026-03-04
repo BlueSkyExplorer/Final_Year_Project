@@ -3,6 +3,7 @@ model:
   paradigm: multiclass
   backbone: efficientnet_b0
   loss: cbce
+  beta: 0.9999
   head_dropout: 0.0
 training:
   batch_size: 16

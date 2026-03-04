@@ -1,9 +1,10 @@
-experiment_name: ordinal_resnet18_distance
+experiment_name: multiclass_efficientnet_b0_distance
 model:
-  paradigm: ordinal
-  backbone: resnet18
+  paradigm: multiclass
+  backbone: efficientnet_b0
   loss: distance
-  alpha: 5
+  alpha: 6
+  head_dropout: 0.0
 training:
   batch_size: 16
   num_epochs: 40

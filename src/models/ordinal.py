@@ -64,23 +64,3 @@ def corn_logits_to_class_probs(logits: torch.Tensor, num_classes: int) -> torch.
     return class_probs
 
 
-def distance_aware_loss(
-    logits: torch.Tensor,
-    targets: torch.Tensor,
-    num_classes: int = 4,
-    alpha: float = 1.0,
-) -> torch.Tensor:
-    if logits.size(1) == num_classes:
-        probs = F.softmax(logits, dim=1)
-    elif logits.size(1) == num_classes - 1:
-        probs = _ordinal_logits_to_class_probs(logits, num_classes)
-    else:
-        raise ValueError(
-            f"Expected logits with shape [B, {num_classes}] or [B, {num_classes - 1}], got {tuple(logits.shape)}"
-        )
-
-    class_indices = torch.arange(num_classes, device=logits.device).unsqueeze(0)
-    distance_weights = torch.abs(class_indices - targets.unsqueeze(1).long()).float().pow(alpha)
-    wrong_class_mask = 1.0 - F.one_hot(targets.long(), num_classes=num_classes).float()
-    penalty = -torch.log1p(-(probs.clamp(max=1 - 1e-7)))
-    return torch.mean(torch.sum(distance_weights * wrong_class_mask * penalty, dim=1))

@@ -26,6 +26,9 @@ LOSS_PARAM_DEFAULTS = {
     "distance": {
         "alpha": [3, 5, 7],
     },
+    "cbce": {
+        "beta": [0.99, 0.999, 0.9999],
+    },
 }
 
 TRAIN_SCRIPT_BY_PARADIGM = {

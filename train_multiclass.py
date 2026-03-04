@@ -18,9 +18,11 @@ from src.losses import multiclass as mc_losses
 from src.metrics.classification_metrics import evaluate_all
 
 
-def _build_dataset_class_weights(train_dataset, num_classes: int, device: torch.device) -> torch.Tensor:
+def _build_dataset_class_weights(
+    train_dataset, num_classes: int, device: torch.device, beta: float = 0.9999,
+) -> torch.Tensor:
     labels = torch.tensor(train_dataset.samples["label"].tolist(), dtype=torch.long)
-    class_weights = mc_losses.compute_class_weights(labels, num_classes=num_classes)
+    class_weights = mc_losses.compute_class_weights(labels, num_classes=num_classes, beta=beta)
     return class_weights.to(device)
 
 
@@ -158,9 +160,17 @@ def main():
     if loss_name == "ce":
         criterion = mc_losses.cross_entropy_loss
     elif loss_name == "cbce":
-        class_weights = _build_dataset_class_weights(train_ds, num_classes=4, device=device)
-        logger.info(f"Using dataset-level CBCE class weights: {class_weights.tolist()}")
-        criterion = lambda logits, targets: mc_losses.class_balanced_ce(logits, targets, class_weights=class_weights)
+        cbce_beta = cfg["model"].get("beta", 0.9999)
+        class_weights = _build_dataset_class_weights(
+            train_ds, num_classes=4, device=device, beta=cbce_beta,
+        )
+        logger.info(
+            f"Using CB loss (Cui et al. 2019) beta={cbce_beta}, "
+            f"effective-number weights: {class_weights.tolist()}"
+        )
+        criterion = lambda logits, targets: mc_losses.class_balanced_ce(
+            logits, targets, class_weights=class_weights,
+        )
     elif loss_name == "focal":
         focal_alpha = _parse_focal_alpha(cfg["model"].get("alpha", 0.25), num_classes=4, device=device)
         logger.info(f"Using focal loss alpha: {focal_alpha if isinstance(focal_alpha, float) or focal_alpha is None else focal_alpha.tolist()}")
@@ -169,6 +179,17 @@ def main():
             targets,
             gamma=cfg["model"].get("gamma", 2.0),
             alpha=focal_alpha,
+        )
+    elif loss_name == "distance":
+        cdw_alpha = cfg["model"].get("alpha", 1.0)
+        logger.info(
+            f"Using CDW-CE loss (Polat et al. 2022) with alpha={cdw_alpha}"
+        )
+        criterion = lambda logits, targets: mc_losses.cdw_ce_loss(
+            logits,
+            targets,
+            num_classes=4,
+            alpha=cdw_alpha,
         )
     else:
         raise ValueError(f"Unknown loss {loss_name}")

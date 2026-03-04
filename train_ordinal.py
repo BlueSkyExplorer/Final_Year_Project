@@ -148,18 +148,6 @@ def main():
         decode_fn = ordinal_utils.corn_logits_to_label
         proba_fn = ordinal_utils.corn_logits_to_class_probs
         auroc_source = "ordinal_class_probs_corn"
-    elif loss_name == "distance":
-        alpha = cfg["model"].get("alpha", 1.0)
-        logger.info(f"Using distance-aware CDW-CE loss with alpha={alpha}")
-        loss_fn = lambda logits, targets: ordinal_losses.distance_aware_loss(
-            logits,
-            targets,
-            num_classes=4,
-            alpha=alpha,
-        )
-        decode_fn = ordinal_utils.coral_logits_to_label
-        proba_fn = ordinal_utils._ordinal_logits_to_class_probs
-        auroc_source = "ordinal_class_probs_coral"
     else:
         raise ValueError(f"Unknown loss {loss_name}")
     logger.info("Using loss '%s' with decoder '%s'", loss_name, decode_fn.__name__)
