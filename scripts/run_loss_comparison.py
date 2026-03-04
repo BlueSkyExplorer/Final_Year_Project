@@ -93,6 +93,20 @@ def get_best_qwk(result_root: Path, experiment_name: str, fold: int) -> float | 
     return best_qwk
 
 
+def get_report_qwk(result_root: Path, experiment_name: str, fold: int) -> float | None:
+    metrics_path = result_root / experiment_name / f"fold_{fold}" / "test_metrics.json"
+    if not metrics_path.exists():
+        return get_best_qwk(result_root, experiment_name, fold)
+    try:
+        payload = json.loads(metrics_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+    try:
+        return float(payload.get("qwk"))
+    except (TypeError, ValueError):
+        return None
+
+
 
 def build_candidates(
     *,
@@ -353,7 +367,8 @@ def main() -> None:
     parser.add_argument("--lr-grid", type=str, default="1e-4,3e-4,1e-3")
     parser.add_argument("--wd-grid", type=str, default="1e-5,1e-4,3e-4")
     parser.add_argument("--preview-folds", type=str, default="0,1")
-    parser.add_argument("--full-folds", type=str, default="0,1,2,3,4")
+    parser.add_argument("--report-folds", type=str, default="2,3,4")
+    parser.add_argument("--full-folds", type=str, default="", help="Deprecated alias for --report-folds.")
     parser.add_argument("--top-k", type=int, default=2)
     parser.add_argument(
         "--prefer-per-loss",
@@ -368,7 +383,13 @@ def main() -> None:
     lr_grid = parse_float_list(args.lr_grid)
     wd_grid = parse_float_list(args.wd_grid)
     preview_folds = parse_int_list(args.preview_folds)
-    full_folds = parse_int_list(args.full_folds)
+    report_folds = parse_int_list(args.full_folds) if args.full_folds else parse_int_list(args.report_folds)
+    has_fold_overlap = bool(set(preview_folds) & set(report_folds))
+    if has_fold_overlap:
+        print(
+            f"[WARN] preview_folds={preview_folds} overlaps with report_folds={report_folds}. "
+            "This increases selection leakage risk."
+        )
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = Path(args.run_dir) if args.run_dir else Path(args.output_root) / f"per_loss_tuning_{timestamp}"
@@ -471,7 +492,7 @@ def main() -> None:
             chosen_exp = chosen["experiment_name"]
             cand = exp_to_candidate[chosen_exp]
             final_failed_folds: List[str] = []
-            for fold in full_folds:
+            for fold in report_folds:
                 key = (normalized_cfg_path, chosen_exp, fold)
                 existing = get_registry_record(
                     registry_state,
@@ -500,7 +521,7 @@ def main() -> None:
                 if result.status == "failed":
                     final_failed_folds.append(f"fold{fold}: {result.error_summary}")
 
-            fold_scores = {fold: get_best_qwk(Path("results"), chosen_exp, fold) for fold in full_folds}
+            fold_scores = {fold: get_report_qwk(Path("results"), chosen_exp, fold) for fold in report_folds}
             vals = [v for v in fold_scores.values() if v is not None]
             final_rows.append(
                 {
@@ -514,6 +535,10 @@ def main() -> None:
                     "batch_size": cand.batch_size,
                     "loss_params": json.dumps(cand.loss_params, ensure_ascii=False),
                     "full_fold_scores": json.dumps(fold_scores, ensure_ascii=False),
+                    "selection_folds": json.dumps(preview_folds),
+                    "report_folds": json.dumps(report_folds),
+                    "has_fold_overlap": has_fold_overlap,
+                    "selection_leakage_risk": "high" if has_fold_overlap else "controlled",
                     "mean_qwk": statistics.fmean(vals) if vals else float("-inf"),
                     "std_qwk": statistics.pstdev(vals) if len(vals) > 1 else 0.0,
                     "status": "failed" if final_failed_folds else "completed",

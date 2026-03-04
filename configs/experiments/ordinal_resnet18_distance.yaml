@@ -1,6 +1,6 @@
-experiment_name: multiclass_resnet18_distance
+experiment_name: ordinal_resnet18_distance
 model:
-  paradigm: multiclass
+  paradigm: ordinal
   backbone: resnet18
   loss: distance
   alpha: 5

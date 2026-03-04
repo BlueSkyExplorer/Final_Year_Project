@@ -22,23 +22,31 @@ def build_model(cfg):
     backbone = build_backbone(backbone_name, pretrained=False)
     feature_dim = get_backbone_output_dim(backbone_name)
 
+    loss_name = cfg["model"].get("loss", "")
+
     if paradigm == "multiclass":
         head = MultiClassHead(feature_dim, num_classes=4)
     elif paradigm == "ordinal":
-        head = OrdinalHead(feature_dim, num_classes=4)
+        # CDW-CE (distance) uses MultiClassHead; CORAL/CORN use OrdinalHead
+        if loss_name == "distance":
+            head = MultiClassHead(feature_dim, num_classes=4)
+        else:
+            head = OrdinalHead(feature_dim, num_classes=4)
     elif paradigm == "regression":
         head = RegressionHead(feature_dim)
     else:
         raise ValueError(f"Unsupported paradigm for CAM generation: {paradigm}")
 
-    return torch.nn.Sequential(backbone, head), paradigm
+    return torch.nn.Sequential(backbone, head), paradigm, loss_name
 
 
-def get_predicted_labels(outputs: torch.Tensor, paradigm: str):
+def get_predicted_labels(outputs: torch.Tensor, paradigm: str, loss_name: str = ""):
     if paradigm == "multiclass":
         return outputs.argmax(dim=1)
 
     if paradigm == "ordinal":
+        if loss_name == "distance":
+            return outputs.argmax(dim=1)
         return ordinal_utils.coral_logits_to_label(outputs)
 
     if paradigm == "regression":
@@ -67,7 +75,7 @@ def parse_target_classes(raw_target_classes: str, num_classes: int = 4):
     return sorted(set(target_classes))
 
 
-def build_target_for_class(outputs: torch.Tensor, paradigm: str, target_class: int):
+def build_target_for_class(outputs: torch.Tensor, paradigm: str, target_class: int, loss_name: str = ""):
     batch_size = outputs.size(0)
     device = outputs.device
     target_category = torch.full((batch_size,), target_class, dtype=torch.long, device=device)
@@ -76,6 +84,9 @@ def build_target_for_class(outputs: torch.Tensor, paradigm: str, target_class: i
         return target_category, None
 
     if paradigm == "ordinal":
+        if loss_name == "distance":
+            # CDW-CE uses softmax outputs, same as multiclass
+            return target_category, None
         class_probs = ordinal_utils._ordinal_logits_to_class_probs(outputs, num_classes=4)
         target_scores = class_probs[:, target_class]
         return None, target_scores
@@ -109,7 +120,7 @@ def main():
     ds = LIMUCDataset(cfg, split=args.split)
     loader = DataLoader(ds, batch_size=1, shuffle=True)
 
-    model, paradigm = build_model(cfg)
+    model, paradigm, loss_name = build_model(cfg)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
 
@@ -129,7 +140,7 @@ def main():
         images = images.to(device)
         with torch.no_grad():
             outputs = model(images)
-            pred_labels = get_predicted_labels(outputs, paradigm)
+            pred_labels = get_predicted_labels(outputs, paradigm, loss_name)
 
         pending_classes = [target_class for target_class in target_classes if saved[target_class] < args.num_per_class]
         if not pending_classes:
@@ -139,7 +150,7 @@ def main():
         pred_label = int(pred_labels.item())
 
         for target_class in pending_classes:
-            target_category, target_scores = build_target_for_class(outputs, paradigm, target_class)
+            target_category, target_scores = build_target_for_class(outputs, paradigm, target_class, loss_name)
             cam = cam_extractor(images, target_category=target_category, target_scores=target_scores)[0].detach().cpu().numpy()
             cam_resized = cv2.resize(cam, (img_np.shape[1], img_np.shape[0]))
             overlay = overlay_heatmap(img_np, cam_resized)

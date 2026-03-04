@@ -134,7 +134,9 @@ def _require_cfg_value(cfg: dict[str, Any], dotted_path: str) -> Any:
     return cursor
 
 
-def _infer_head_type(paradigm: str) -> str:
+def _infer_head_type(paradigm: str, loss_name: str = "") -> str:
+    if paradigm == "ordinal" and loss_name == "distance":
+        return "MultiClassHead"  # CDW-CE uses softmax head
     head_type_map = {
         "multiclass": "MultiClassHead",
         "ordinal": "OrdinalHead",
@@ -176,7 +178,7 @@ def build_config(
     paradigm = str(_require_cfg_value(cfg, "model.paradigm"))
     loss_name = str(_require_cfg_value(cfg, "model.loss"))
     backbone = str(_require_cfg_value(cfg, "model.backbone"))
-    head_type = str(cfg.get("model", {}).get("head_type") or _infer_head_type(paradigm))
+    head_type = str(cfg.get("model", {}).get("head_type") or _infer_head_type(paradigm, loss_name))
 
     out_cfg.write_text(yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True), encoding="utf-8")
     return {
@@ -612,6 +614,8 @@ def summarize_layer1(
                 ],
                 "is_polluted_combo": polluted,
                 "group_note": group_note,
+                "evaluation_scope": "preview_only",
+                "not_for_final_reporting": True,
                 "failed_reason": " | ".join(failed_reasons) if failed_reasons else "",
             }
         )
@@ -666,6 +670,8 @@ def summarize_layer1(
             "group_note",
             "promoted",
             "promotion_reason",
+            "evaluation_scope",
+            "not_for_final_reporting",
             "failed_reason",
         ]
         writer = csv.DictWriter(f, fieldnames=fieldnames)

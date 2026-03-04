@@ -74,14 +74,17 @@ data\LIMUC\patient_based_classified_images\
 └── ...
 ```
 
-### 建立 fold cache（第一次必做）
+### fold cache（首次訓練自動生成）
 
-`paths.folds_file` 必須先存在，請執行：
+`paths.folds_file` 不需要手動先建立。第一次訓練時會自動生成 patient-level split cache。
 
-```powershell
-New-Item -ItemType Directory -Force -Path configs\folds | Out-Null
-"{}" | Set-Content configs\folds\limuc_5fold_patient.json
-```
+以下條件變更時，系統會自動將 cache 視為失效並重建：
+
+- `data_root`
+- `seed`
+- `cv.num_folds`
+- `cv.test_ratio`
+- patient 清單或 dominant label 分布
 
 ---
 
@@ -174,6 +177,13 @@ python scripts\run_loss_comparison.py `
   --top-k 2
 ```
 
+預設語義：
+
+- `preview_folds=0,1`：只用於選模
+- `report_folds=2,3,4`：只用於最終比較摘要
+
+若兩者重疊，腳本會輸出 selection leakage risk 警告。
+
 ### 合併多人結果
 
 ```powershell
@@ -190,13 +200,18 @@ python scripts\merge_results.py `
 ### Cross-fold 統計
 
 ```powershell
-python analyze_results.py --experiment multiclass_resnet18_ce
+python analyze_results.py --experiment multiclass_resnet18_ce --source test
 ```
 
 預設輸出：
 
 - `results/<experiment>/cross_fold_summary.json`
 - `results/<experiment>/cross_fold_summary.csv`
+
+說明：
+
+- `--source test`：正式報告用，讀取 `test_metrics.json`
+- `--source val`：僅供選模分析，讀取 `best_val_metrics.json`
 
 ### 產生 Grad-CAM
 
@@ -224,12 +239,7 @@ results\<experiment_name>\fold_<k>\cam\
 ## 9. 常見問題（Windows）
 
 ### Q1. 出現 `Configured folds_file does not exist`
-請先建立：
-
-```powershell
-New-Item -ItemType Directory -Force -Path configs\folds | Out-Null
-"{}" | Set-Content configs\folds\limuc_5fold_patient.json
-```
+現在不需要手動建立空的 `folds_file`。請確認 `configs\folds\` 目錄可寫，訓練時會自動建立或重建 cache。
 
 ### Q2. 出現 `No image samples found ... split='val'/'test'`
 常見原因：
@@ -239,7 +249,7 @@ New-Item -ItemType Directory -Force -Path configs\folds | Out-Null
 - 資料量太少或分布不均
 
 ### Q3. 變更 `test_ratio` / `num_folds` 後結果怪怪的
-請刪除舊的 `folds_file` 後重建，避免沿用舊切分。
+新版流程會自動檢查 split 參數與資料摘要，若不一致會自動重建 cache。
 
 ---
 
@@ -251,9 +261,6 @@ python -m venv .venv
 python -m pip install --upgrade pip
 pip install -r requirements.txt
 
-New-Item -ItemType Directory -Force -Path configs\folds | Out-Null
-"{}" | Set-Content configs\folds\limuc_5fold_patient.json
-
 python train_multiclass.py --config configs\experiments\multiclass_resnet18_ce.yaml --fold 0
-python analyze_results.py --experiment multiclass_resnet18_ce
+python analyze_results.py --experiment multiclass_resnet18_ce --source test
 ```

@@ -19,6 +19,10 @@ def parse_mean_qwk(row: Dict[str, str]) -> float:
     return val
 
 
+def result_kind_priority(kind: str) -> int:
+    return 0 if kind == "final_5fold_summary" else 1
+
+
 def read_csv_rows(path: Path, kind: str) -> List[Dict[str, str]]:
     rows: List[Dict[str, str]] = []
     with path.open("r", encoding="utf-8", newline="") as f:
@@ -56,14 +60,21 @@ def main() -> None:
         if final_csv.exists():
             all_rows.extend(read_csv_rows(final_csv, "final_5fold_summary"))
 
-    all_rows.sort(key=parse_mean_qwk, reverse=True)
+    all_rows.sort(
+        key=lambda row: (
+            result_kind_priority(row.get("result_kind", "")),
+            -parse_mean_qwk(row),
+        )
+    )
 
     print(f"Total results merged: {len(all_rows)}")
     for row in all_rows[:10]:
         exp_name = row.get("experiment_name", "")
         mean_qwk = row.get("mean_qwk", "")
         source = row.get("source_dir", "")
-        print(f"- {exp_name} | mean_qwk={mean_qwk} | source={source}")
+        kind = row.get("result_kind", "")
+        note = " | preview_only, not comparable as final report" if kind == "layer1_ranking" else ""
+        print(f"- {exp_name} | kind={kind} | mean_qwk={mean_qwk} | source={source}{note}")
 
 
 if __name__ == "__main__":

@@ -107,12 +107,18 @@ def validate_config(cfg: Dict[str, Any]) -> None:
         raise ValueError(f"Configured data_root is not accessible: {data_root}")
 
     folds_file = Path(paths["folds_file"])
-    if not folds_file.exists():
-        raise ValueError(f"Configured folds_file does not exist: {folds_file}")
-    if not folds_file.is_file():
-        raise ValueError(f"Configured folds_file is not a file: {folds_file}")
-    if not os.access(folds_file, os.R_OK):
-        raise ValueError(f"Configured folds_file is not readable: {folds_file}")
+    folds_parent = folds_file.parent
+    if not folds_parent.exists():
+        folds_parent.mkdir(parents=True, exist_ok=True)
+    if not folds_parent.is_dir():
+        raise ValueError(f"Configured folds_file parent is not a directory: {folds_parent}")
+    if not os.access(folds_parent, os.R_OK | os.W_OK | os.X_OK):
+        raise ValueError(f"Configured folds_file parent is not writable: {folds_parent}")
+    if folds_file.exists():
+        if not folds_file.is_file():
+            raise ValueError(f"Configured folds_file is not a file: {folds_file}")
+        if not os.access(folds_file, os.R_OK):
+            raise ValueError(f"Configured folds_file is not readable: {folds_file}")
 
     training = cfg.get("training", {})
     if not isinstance(training, dict):
